@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Деталі Вантажу</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 25px;
+            box-sizing: border-box;
+        }
+        h1 {
+            font-size: 2em;
+            color: #2d4b48;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .detail-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px dashed #e0e0e0;
+        }
+        .detail-item:last-child {
+            border-bottom: none;
+        }
+        .detail-label {
+            font-weight: 600;
+            color: #425d5a;
+            flex-basis: 40%;
+        }
+        .detail-value {
+            text-align: right;
+            flex-basis: 60%;
+            color: #666;
+            word-break: break-word;
+        }
+        .detail-value.important {
+            font-weight: 700;
+            color: #2d4b48;
+        }
+        .map-link {
+            color: #007bff;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .telegram-button {
+            display: block;
+            width: 100%;
+            padding: 12px 20px;
+            margin-top: 25px;
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            transition: background-color 0.3s ease;
+        }
+        .telegram-button:hover {
+            background-color: #006699;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="cargoId">Деталі вантажу</h1>
+        <div id="detailsContainer">
+            <!-- Деталі будуть завантажені сюди JavaScript -->
+            <p>Завантаження даних...</p>
+        </div>
+        <button id="closeWebApp" class="telegram-button">Закрити</button>
+    </div>
+
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        // Ініціалізація Telegram Web App
+        let tg = window.Telegram.WebApp;
+        if (tg) {
+            tg.ready();
+            tg.expand(); // Розгорнути Web App на весь екран
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const detailsContainer = document.getElementById('detailsContainer');
+            const closeWebAppButton = document.getElementById('closeWebApp');
+
+            if (closeWebAppButton && tg) {
+                closeWebAppButton.addEventListener('click', () => {
+                    tg.close(); // Закрити Web App
+                });
+            } else if (closeWebAppButton) {
+                // Приховати кнопку, якщо не в Telegram Web App
+                closeWebAppButton.classList.add('hidden');
+            }
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const cargoId = urlParams.get('id'); // Тепер ми очікуємо лише ID вантажу тут
+
+            if (cargoId) {
+                document.getElementById('cargoId').innerText = `Завантаження деталей вантажу (ID: ${cargoId})...`;
+                detailsContainer.innerHTML = '<p>Завантаження даних...</p>';
+
+                // Формуємо URL для API Lardi-Trans з отриманим ID
+                const apiUrl = `https://lardi-trans.com/webapi/proposal/offer/gruz/${cargoId}/awaiting/?currentId=${cargoId}`;
+                const headers = {
+                    "accept": "application/json, text/plain, */*",
+                    "user-agent": "Mozilla/5.0",
+                    // Важливо: Cookies будуть автоматично надіслані браузером, якщо вони існують для домену Lardi-Trans
+                    // і користувач авторизований. Якщо Lardi-Trans має суворі CORS політики, або вимагає
+                    // конкретних авторизаційних заголовків, які не є частиною стандартних куків,
+                    // цей запит може бути заблокований браузером.
+                    // У такому випадку, необхідно буде реалізувати проксі на стороні вашого Python-бота.
+                };
+
+                fetch(apiUrl, { headers: headers })
+                    .then(response => {
+                        if (!response.ok) {
+                            // Якщо HTTP статус не 2xx, викидаємо помилку
+                            throw new Error(`HTTP error! Status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        const cargo = data.cargo; // Детальний об'єкт вантажу знаходиться всередині ключа 'cargo'
+                        if (cargo) {
+                            document.getElementById('cargoId').innerText = `Деталі вантажу (ID: ${cargo.id})`;
+                            detailsContainer.innerHTML = ''; // Очищаємо повідомлення про завантаження
+
+                            // Функція для додавання рядка деталей
+                            const addDetail = (label, value, isImportant = false) => {
+                                // Додано додаткові перевірки для масивів
+                                if (value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
+                                    return; // Не показуємо пусті, невизначені або порожні масиви
+                                }
+                                const item = document.createElement('div');
+                                item.className = 'detail-item';
+                                item.innerHTML = `
+                                    <span class="detail-label">${label}:</span>
+                                    <span class="detail-value ${isImportant ? 'important' : ''}">${value}</span>
+                                `;
+                                detailsContainer.appendChild(item);
+                            };
+
+                            // Функція для форматування дати
+                            const formatDate = (isoString) => {
+                                if (!isoString) return '—';
+                                try {
+                                    const date = new Date(isoString);
+                                    return date.toLocaleString('uk-UA', {
+                                        year: 'numeric',
+                                        month: '2-digit',
+                                        day: '2-digit',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: false
+                                    });
+                                } catch (e) {
+                                    return isoString; // Повертаємо оригінал, якщо не вдалося розпарсити
+                                }
+                            };
+
+                            // Функція для генерації посилання на Google Maps
+                            const getMapLink = (lat, lon, label) => {
+                                if (lat && lon) {
+                                    return `<a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" class="map-link">${label}</a>`;
+                                }
+                                return label;
+                            };
+
+                            // Функція для виводу списків (наприклад, loadTypes, paymentForms)
+                            const formatList = (list) => {
+                                if (Array.isArray(list)) {
+                                    return list.map(item => item.name || item).join(', ');
+                                }
+                                return list;
+                            };
+
+
+                            // Заповнення деталей вантажу з отриманих даних
+                            addDetail('Статус', cargo.status, true);
+                            addDetail('Створено', formatDate(cargo.dateCreate));
+                            addDetail('Дата завантаження', `${formatDate(cargo.dateFrom)} → ${formatDate(cargo.dateTo)}`);
+                            addDetail('Тип кузова', cargo.bodyType);
+                            addDetail('Вантаж', cargo.gruzName, true);
+                            addDetail('Маса', cargo.gruzMass1 ? `${cargo.gruzMass1} т` : ''); // Використовуємо gruzMass1
+                            addDetail('Об\'єм', cargo.gruzVolume1 ? `${cargo.gruzVolume1} м³` : ''); // Використовуємо gruzVolume1
+                            addDetail('Довжина', cargo.gruzLength ? `${cargo.gruzLength} м.` : '');
+                            addDetail('Ширина', cargo.gruzWidth ? `${cargo.gruzWidth} м.` : '');
+                            addDetail('Висота', cargo.gruzHeight ? `${cargo.gruzHeight} м.` : '');
+                            addDetail('Тип завантаження', formatList(cargo.loadTypes));
+                            addDetail('Оплата', cargo.paymentValue ? `${cargo.paymentValue} ${cargo.paymentCurrency || ''} (${formatList(cargo.paymentForms)})` : formatList(cargo.paymentForms));
+                            addDetail('Опис ціни', cargo.paymentValueDescription);
+                            addDetail('Деталі оплати', cargo.paymentDetails || cargo.paymentMoment);
+                            addDetail('Відстань (км)', cargo.distance ? `${Math.round(cargo.distance / 1000)} км` : '—');
+                            addDetail('Збірний вантаж', cargo.groupage ? 'Так' : 'Ні');
+                            addDetail('Преміум власник', cargo.ownerPremium ? 'Так' : 'Ні');
+                            addDetail('Повторюваний', cargo.repeated ? 'Так' : 'Ні');
+                            addDetail('Примітка', cargo.note);
+
+                            // Додаємо інформацію про контактну особу, якщо є
+                            if (cargo.proposalUser && cargo.proposalUser.contact) {
+                                const contact = cargo.proposalUser.contact;
+                                addDetail('Контактна особа', contact.face || contact.name);
+                                if (contact.phoneItem1 && contact.phoneItem1.phone) {
+                                    addDetail('Телефон 1', `<a href="tel:${contact.phoneItem1.phone}">${contact.phoneItem1.phone}</a>`);
+                                }
+                                if (contact.phoneItem2 && contact.phoneItem2.phone) {
+                                    addDetail('Телефон 2', `<a href="tel:${contact.phoneItem2.phone}">${contact.phoneItem2.phone}</a>`);
+                                }
+                                if (contact.phoneItem3 && contact.phoneItem3.phone) {
+                                    addDetail('Телефон 3', `<a href="tel:${contact.phoneItem3.phone}">${contact.phoneItem3.phone}</a>`);
+                                }
+                                if (contact.phoneItem4 && contact.phoneItem4.phone) {
+                                    addDetail('Телефон 4', `<a href="tel:${contact.phoneItem4.phone}">${contact.phoneItem4.phone}</a>`);
+                                }
+                            }
+
+                            // Додаємо інформацію про точки маршруту з посиланнями на карту
+                            cargo.waypointListSource.forEach((wp, index) => {
+                                const city = wp.townName || wp.town || 'Невідомо';
+                                const region = wp.region ? `, ${wp.region}` : (wp.areaName ? `, ${wp.areaName}` : '');
+                                const country = wp.countrySign ? ` (${wp.countrySign})` : '';
+                                const address = wp.address ? `, ${wp.address}` : '';
+                                addDetail(`Завантаження ${index + 1}`, getMapLink(wp.lat, wp.lon, `${city}${region}${country}${address}`), true);
+                            });
+
+                            cargo.waypointListTarget.forEach((wp, index) => {
+                                const city = wp.townName || wp.town || 'Невідомо';
+                                const region = wp.region ? `, ${wp.region}` : (wp.areaName ? `, ${wp.areaName}` : '');
+                                const country = wp.countrySign ? ` (${wp.countrySign})` : '';
+                                const address = wp.address ? `, ${wp.address}` : '';
+                                addDetail(`Вивантаження ${index + 1}`, getMapLink(wp.lat, wp.lon, `${city}${region}${country}${address}`), true);
+                            });
+
+                        } else {
+                            detailsContainer.innerHTML = '<p class="text-red-500">Дані про вантаж не знайдено в API-відповіді.</p>';
+                        }
+                    })
+                    .catch(error => {
+                        detailsContainer.innerHTML = `<p class="text-red-500">Помилка завантаження деталей вантажу: ${error.message}. <br>Перевірте, чи ви авторизовані на Lardi-Trans у цьому браузері, або спробуйте оновити Cookie у боті.</p>`;
+                        console.error("Error fetching cargo details:", error);
+                    });
+            } else {
+                detailsContainer.innerHTML = '<p>ID вантажу не передано.</p>';
+            }
+        });
+    </script>
+</body>
+</html>
