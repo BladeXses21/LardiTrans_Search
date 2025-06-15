@@ -128,9 +128,5 @@ class LardiClient:
         self.cookie = new_cookie
         self.headers["cookie"] = new_cookie
         os.environ["LARDI_COOKIE"] = new_cookie # Оновлюємо змінну середовища
-        # Для постійного зберігання, розгляньте можливість запису в .env файл,
-        # але це може бути небажано, якщо бот працює на сервері.
-        # Змінимо `print` на `logging.info` або просто не будемо виводити,
-        # оскільки це буде оброблятися в Telegram-повідомленнях.
-        # print("✅ Cookie оновлено.")
+
 

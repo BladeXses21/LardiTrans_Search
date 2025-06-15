@@ -139,9 +139,11 @@ def get_cargo_details_webapp_keyboard(cargo_id: int) -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
     # URL для WebApp буде виглядати: https://your-domain.com/webapp/cargo_details.html?id={cargo_id}
-    webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}?id={cargo_id}"
+    # Змінено, щоб відповідати маршруту `/webapp/cargo_details.html` у `web_server.py`
+    webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}.html?id={cargo_id}"
 
     # Створюємо кнопку, яка відкриває Web App
     builder.row(InlineKeyboardButton(text="Деталі вантажу", web_app=WebAppInfo(url=webapp_url_with_id)))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data="start_menu"))
     return builder.as_markup()
+

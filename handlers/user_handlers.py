@@ -15,7 +15,8 @@ from keyboards import (
     get_cargo_params_filter_keyboard,
     get_load_types_filter_keyboard,
     get_reset_filters_confirm_keyboard,
-    get_back_to_filter_main_menu_button, get_cargo_details_webapp_keyboard
+    get_back_to_filter_main_menu_button,
+    get_cargo_details_webapp_keyboard
 )
 from fsm_states import LardiForm, FilterForm
 from lardi_api_client import LardiClient, LardiOfferClient
@@ -26,6 +27,7 @@ router = Router()
 # Ініціалізація клієнтів Lardi
 lardi_client = LardiClient()
 lardi_offer_client = LardiOfferClient()
+
 
 # Ім'я бота для посилання на Web App
 # BOT_USERNAME = 'LardiSearch_bot'
@@ -80,11 +82,11 @@ async def cb_search_offers(callback: CallbackQuery):
             return
 
         response_text = "📋 *Знайдені вантажі:*\n\n"
-        for i, item in enumerate(results[:5], 1): # Вивід обмежено
+        for i, item in enumerate(results[:5], 1):  # Вивід обмежено
             print(item)
             _id = item.get('id', '')
 
-            webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}?id={_id}"
+            webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}.html?id={_id}"
             status = item.get('status', '')
 
             from_data = item.get("waypointListSource", [{}])[0]
@@ -144,6 +146,7 @@ async def cb_search_offers(callback: CallbackQuery):
         await callback.message.answer(f"❌ Сталася помилка при завантаженні вантажів: {e}", reply_markup=get_back_to_main_menu_button())
     finally:
         await callback.answer()
+
 
 @router.callback_query(F.data == "view_offer_by_id")
 async def cb_view_offer_by_id(callback: CallbackQuery, state: FSMContext):

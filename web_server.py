@@ -1,30 +1,66 @@
 import os
+import asyncio
 from aiohttp import web
+from app_config import env_config  # Імпортуємо env_config для доступу до LARDI_COOKIE
+from lardi_api_client import LardiOfferClient  # Імпортуємо LardiOfferClient
 
-# Переконайтеся, що файл cargo_details.html знаходиться всередині цієї папки або її підпапок
-WEBAPP_DIR = os.path.join(os.path.dirname(__file__), 'webapp')  # Припускаємо, що webapp папка на тому ж рівні, що й main.py
+# Шлях до папки з вашими статичними файлами Web App
+WEBAPP_DIR = os.path.join(os.path.dirname(__file__), 'webapp')
+
+# Ініціалізуємо LardiOfferClient (зверніть увагу: це може бути спільний об'єкт)
+lardi_offer_client = LardiOfferClient()
 
 
 async def webapp_handler(request):
     """
     Обробник запитів для Web App. Подає HTML-файл.
+    Замінює плейсхолдер WEBAPP_API_PROXY_URL у HTML.
+    HTML-файл відповідає за отримання ID вантажу з параметрів URL
+    та здійснення клієнтського запиту до проксі-API.
     """
     file_path = os.path.join(WEBAPP_DIR, 'cargo_details.html')
     if os.path.exists(file_path):
-        return web.FileResponse(file_path)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+
+        # Замінюємо плейсхолдер у HTML на реальний URL проксі-API
+        # Це дозволить JavaScript на клієнті знати, куди відправляти запит за даними.
+        html_content = html_content.replace("{{WEBAPP_API_PROXY_URL}}", env_config.WEBAPP_API_PROXY_URL)
+
+        return web.Response(text=html_content, content_type='text/html')
     else:
         return web.Response(text="Web App HTML file not found", status=404)
 
 
-async def main():
+async def cargo_details_proxy_api(request):
+    """
+    Проксі-ендпоінт для отримання детальної інформації про вантаж з Lardi-Trans API.
+    Використовує LARDI_COOKIE з серверного боку.
+    Очікує cargo_id як параметр запиту 'id'.
+    """
+    cargo_id = request.query.get('id')
+    if not cargo_id:
+        return web.json_response({"error": "Missing cargo ID"}, status=400)
+
+    try:
+        cargo_data = lardi_offer_client.get_offer(int(cargo_id))
+        return web.json_response(cargo_data)
+    except Exception as e:
+        print(f"Error fetching cargo details via proxy: {e}")
+        return web.json_response({"error": f"Failed to fetch cargo details: {e}"}, status=500)
+
+
+# Функція start_web_app більше не використовується безпосередньо в main.py,
+# оскільки маршрути додаються безпосередньо до web_app у main.py.
+# Проте, якщо ви плануєте запускати web_server.py як окремий процес,
+# ця функція все ще може бути корисною.
+async def start_web_app():
     app = web.Application()
-    # Додаємо маршрут для вашої HTML-сторінки.
-    # Маршрут "/webapp/cargo_details.html" повинен відповідати WEBAPP_BASE_URL в app_config.py
+    # Маршрут для подачі HTML-сторінки Web App
     app.router.add_get('/webapp/cargo_details.html', webapp_handler)
 
-    # Додаємо маршрут для статичних файлів, якщо у вас є CSS/JS файли окремо
-    # Якщо все в одному HTML, цей маршрут може не знадобитися
-    # app.router.add_static('/webapp/', WEBAPP_DIR)
+    # Маршрут для проксі-API
+    app.router.add_get('/api/cargo_details', cargo_details_proxy_api)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -38,7 +74,6 @@ async def main():
 
 
 if __name__ == '__main__':
-    import asyncio
+    # Для запуску сервера web_server.py окремо
+    asyncio.run(start_web_app())
 
-    # Для запуску сервера web_server.py
-    asyncio.run(main())

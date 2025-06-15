@@ -10,9 +10,11 @@ class EnvConfig:
     """
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     LARDI_COOKIE: str = os.getenv("LARDI_COOKIE", "")
-    # Додайте сюди ID адміністраторів, якщо це потрібно для вашого бота
-    # ADMIN_USER_IDS: list[int] = list(map(int, os.getenv("ADMIN_USER_IDS", "").split(','))) if os.getenv("ADMIN_USER_IDS") else []
-    WEBAPP_BASE_URL: str = os.getenv("WEBAPP_BASE_URL", "https://148f-91-245-124-201.ngrok-free.app/webapp/cargo_details.html")
+
+    # Виправлено типографічну помилку в домені для всіх URL
+    WEBAPP_BASE_URL: str = os.getenv("WEBAPP_BASE_URL", "https://a454-91-245-124-201.ngrok-free.app/webapp/cargo_details")
+    WEBAPP_API_PROXY_URL: str = os.getenv("WEBAPP_API_PROXY_URL", "https://a454-91-245-124-201.ngrok-free.app/api/cargo_details")
+
 
 env_config = EnvConfig()
 
