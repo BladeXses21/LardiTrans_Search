@@ -9,7 +9,9 @@ class EnvConfig:
     Клас для зберігання конфігурації з змінних середовища.
     """
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    LARDI_COOKIE: str = os.getenv("LARDI_COOKIE", "")
+    LARDI_COOKIE: str = os.getenv("LARDI_COOKIE", "") # Ця змінна більше не використовується для активних cookie, але залишиться для сумісності
+    LARDI_USERNAME: str = os.getenv("LARDI_USERNAME", "") # Нова змінна для логіну Lardi-Trans
+    LARDI_PASSWORD: str = os.getenv("LARDI_PASSWORD", "") # Нова змінна для пароля Lardi-Trans
 
     # Виправлено типографічну помилку в домені для всіх URL
     WEBAPP_BASE_URL: str = os.getenv("WEBAPP_BASE_URL", "https://a454-91-245-124-201.ngrok-free.app/webapp/cargo_details")

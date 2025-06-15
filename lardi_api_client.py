@@ -1,10 +1,17 @@
 import os
 import requests
 import json
+import logging
 from dotenv import load_dotenv
+from cookie_manager import CookieManager
+from typing import Optional
 
 # Завантажуємо змінні середовища
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+_cookie_manager = CookieManager()
 
 
 class LardiOfferClient:
@@ -13,25 +20,50 @@ class LardiOfferClient:
     """
     def __init__(self):
         self.base_url = "https://lardi-trans.com/webapi/proposal/offer/gruz/"
-        self.cookie = os.getenv("LARDI_COOKIE", "")
+        self._update_headers_with_cookies() # Оновлюємо заголовки при ініціалізації
+
+    def _update_headers_with_cookies(self):
+        """Оновлює заголовки HTTP з поточними cookie від CookieManager."""
         self.headers = {
             "accept": "application/json, text/plain, */*",
             "user-agent": "Mozilla/5.0",
-            "cookie": self.cookie,
+            "cookie": _cookie_manager.get_cookie_string(),  # Беремо cookie з менеджера
             "referer": "https://lardi-trans.com/log/search/gruz/",
             "origin": "https://lardi-trans.com"
         }
 
-    def get_offer(self, offer_id: int):
+    def get_offer(self, offer_id: int, retry_count: int = 1) -> Optional[dict]:
         """Отримати інформацію про вантаж за його ID."""
         url = f"{self.base_url}{offer_id}/awaiting/?currentId={offer_id}"
-        response = requests.get(url, headers=self.headers)
+        self._update_headers_with_cookies()
 
-        if response.status_code == 200:
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status() # виклик HTTPError для 4xx/5xx статусів
             return response.json()
-        else:
-            # Змінено для кращого обробника помилок в боті
-            raise Exception(f"Error {response.status_code}: {response.text}")
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 401:
+                logger.warning(f"Отримано 401 Unauthorized для offer_id={offer_id}. Спроба оновити cookie.")
+                if retry_count > 0:
+                    if _cookie_manager.refresh_lardi_cookies():
+                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
+                        self._update_headers_with_cookies() # Оновлюємо заголовки після оновлення cookie
+                        return  self.get_offer(offer_id=offer_id, retry_count=retry_count - 1)
+                    else:
+                        logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
+                        raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
+                else:
+                    logger.error(f"Не вдалося отримати дані після повторної спроби. Максимальна кількість спроб.")
+                    raise Exception(f"Error: {response.status_code}: {response.text}")
+            else:
+                logger.error(f"Непередбачена HTTP помилка для offer_id={offer_id}: {e}")
+                raise Exception(f"Error {response.status_code}: {response.text}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Помилка мережі при отриманні offer_id={offer_id}: {e}")
+            raise Exception(f"Network Error: {e}")
+        except Exception as e:
+            logger.error(f"Невідома помилка при отриманні offer_id={offer_id}: {e}")
+            raise Exception(f"Unknown Error: {e}")
 
 
 class LardiClient:
@@ -40,19 +72,22 @@ class LardiClient:
     """
     def __init__(self):
         self.url = "https://lardi-trans.com/webapi/proposal/search/gruz/"
-        self.cookie = os.getenv("LARDI_COOKIE", "")
+        self._update_headers_with_cookies() # Оновлюємо заголовки при ініціалізації
+        self.page = 1
+        self.page_size = 20
+        self.sort_by_country = False
+        self.filters = self.default_filters()
+
+    def _update_headers_with_cookies(self):
+        """Оновлює заголовки HTTP з поточними cookie від CookieManager."""
         self.headers = {
             "accept": "application/json, text/plain, */*",
             "content-type": "application/json",
             "origin": "https://lardi-trans.com",
             "referer": "https://lardi-trans.com/log/search/gruz/",
             "user-agent": "Mozilla/5.0",
-            "cookie": self.cookie,
+            "cookie": _cookie_manager.get_cookie_string(), # Беремо cookie з менеджера
         }
-        self.page = 1
-        self.page_size = 20
-        self.sort_by_country = False
-        self.filters = self.default_filters()
 
     def default_filters(self):
         """Повертає фільтри за замовчуванням."""
@@ -108,25 +143,57 @@ class LardiClient:
         # Для простих ключів - просто встановлюємо значення.
         self.filters[key] = value
 
-    def load_data(self):
-        """Завантажує дані за поточними фільтрами."""
+    def load_data(self, retry_count: int = 1) -> Optional[dict]:
+        """
+        Завантажує дані за поточними фільтрами.
+        Реалізовано механізм повторної спроби у разі 401 помилки.
+        """
         payload = {
             "page": self.page,
             "size": self.page_size,
             "sortByCountryFirst": self.sort_by_country,
             "filter": self.filters,
         }
-        response = requests.post(self.url, headers=self.headers, json=payload)
+        self._update_headers_with_cookies()  # Переконаємося, що cookie актуальні перед запитом
 
-        if response.status_code == 200:
+        try:
+            response = requests.post(self.url, headers=self.headers, json=payload)
+            response.raise_for_status()
             return response.json()
-        else:
-            raise Exception(f"Error {response.status_code}: {response.text}")
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 401:
+                logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
+                if retry_count > 0:
+                    if _cookie_manager.refresh_lardi_cookies():
+                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
+                        self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
+                        return self.load_data(retry_count - 1)  # Повторюємо запит
+                    else:
+                        logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
+                        raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
+                else:
+                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+                    raise Exception(f"Error {response.status_code}: {response.text}")
+            else:
+                logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
+                raise Exception(f"Error {response.status_code}: {response.text}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Помилка мережі при завантаженні даних: {e}")
+            raise Exception(f"Network Error: {e}")
+        except Exception as e:
+            logger.error(f"Невідома помилка при завантаженні даних: {e}")
+            raise Exception(f"Unknown Error: {e}")
 
     def update_cookie(self, new_cookie: str):
-        """Оновлення cookie у файлі .env"""
-        self.cookie = new_cookie
+        """
+        Цей метод тепер фактично не буде використовуватися для оновлення cookie,
+        оскільки оновлення відбувається автоматично через CookieManager.
+        Однак, я залишаю його для сумісності, якщо ви все ж захочете вручну встановити cookie.
+        """
+        logger.warning("Ручне оновлення cookie через update_cookie() тепер не рекомендується. Використовуйте автоматичне оновлення.")
+        # Тут можна було б оновити _cookie_manager.cookies, але це менш безпечно,
+        # ніж повний вхід. Якщо все ж потрібна ця функція, її варто переробити.
+        # Для простоти, я просто оновлюю заголовки.
         self.headers["cookie"] = new_cookie
-        os.environ["LARDI_COOKIE"] = new_cookie # Оновлюємо змінну середовища
 
 
