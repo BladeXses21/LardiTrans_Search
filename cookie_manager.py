@@ -95,7 +95,7 @@ class CookieManager:
         try:
             # Ініціалізація undetected_chromedriver в безголовому режимі
             options = uc.ChromeOptions()
-            # options.add_argument('--headless')  # Запуск без вікна браузера
+            options.add_argument('--headless')  # Запуск без вікна браузера
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
@@ -146,7 +146,7 @@ class CookieManager:
             login_button_xpath = "//button[@type='submit' and text()='Увійти']"
             login_button = wait.until(EC.element_to_be_clickable((By.XPATH, login_button_xpath)))
             logger.info(f"Знайдено кнопку 'Увійти' за XPath: {login_button_xpath}. Натискання...")
-            time.sleep(2)
+            time.sleep(1)
             login_button.click()
 
             # Спроба обробити модальне вікно ліміту сесій після спроби входу
@@ -159,7 +159,7 @@ class CookieManager:
             # Якщо URL залишився тим самим, але ви бачите повідомлення про помилку, це означає невдалий вхід.
 
             # Наприклад, чекаємо, що поточний URL не міститиме '/accounts/login/'
-            time.sleep(2)
+            time.sleep(0.5)
             # Додаткова перевірка: чи не залишилися ми на сторінці входу з повідомленням про помилку
             if "accounts/login" in driver.current_url:
                 if "Неправильный логин или пароль" in driver.page_source or "Incorrect login or password" in driver.page_source:

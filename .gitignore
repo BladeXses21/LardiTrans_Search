@@ -1,1 +1,68 @@
--e ".env\n.idea/" 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg-info/
+*.egg
+*.log
+
+# Env
+.env
+.env.*
+
+# Django
+*.sqlite3
+db.sqlite3
+media/
+staticfiles/
+*.pot
+*.pyc
+*.mo
+
+# PostgreSQL (БД через docker volume або зовнішній сервер — сам файл не трекається)
+*.pgsql
+*.psql
+
+# VSCode / PyCharm / Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+*.seed
+*.bak
+*.swp
+*.swo
+
+# Custom sensitive files
+cookies.json
+url.txt
+
+# Migrations (якщо не хочеш трекати їх тимчасово)
+# */migrations/
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# Byte-compiled, compiled or cache files
+*.cache
+*.coverage
+.coverage.*
+
+# mypy, pylint, etc.
+.mypy_cache/
+.pytest_cache/
+.tox/
+coverage.xml
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
