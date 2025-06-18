@@ -43,7 +43,7 @@ Thumbs.db
 
 # Custom sensitive files
 cookies.json
-url.txt
+urls.txt
 
 # Migrations (якщо не хочеш трекати їх тимчасово)
 # */migrations/
