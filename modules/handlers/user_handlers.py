@@ -5,6 +5,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from asgiref.sync import sync_to_async
 
 from modules.app_config import settings_manager, env_config
 from modules.keyboards import (
@@ -21,12 +22,13 @@ from modules.keyboards import (
 from modules.fsm_states import LardiForm, FilterForm
 from modules.lardi_api_client import LardiClient, LardiOfferClient
 
-from modules.utils import date_format
+from modules.utils import date_format, add_line, user_filter_to_dict
 
 # --- Django моделі ---
 from django.contrib.auth.models import User
 from filters.models import LardiSearchFilter
 from users.models import UserProfile
+from asgiref.sync import sync_to_async
 # ------
 
 router = Router()
@@ -39,6 +41,18 @@ lardi_offer_client = LardiOfferClient()
 # Ім'я бота для посилання на Web App
 # BOT_USERNAME = 'LardiSearch_bot'
 
+
+# Допоміжна функція для отримання фільтрів користувача
+async def get_user_filters_from_db(telegram_id: int) -> LardiSearchFilter:
+    """
+    Отримує об'єкт LardiSearchFilter для даного Telegram ID.
+    Якщо об'єкт не існує, створює його з default_filters.
+    """
+    # Змінено: асинхронні методи ORM await-уємо напряму
+    user_profile = await UserProfile.objects.aget(telegram_id=telegram_id)
+    lardi_filter, created = await LardiSearchFilter.objects.aget_or_create(user=user_profile)
+    return lardi_filter
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
@@ -48,8 +62,6 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear() # Очищуємо стан FSM
 
     telegram_id = message.from_user.id
-    # Використовуємо telegram_id як унікальну частину username
-    # або повний username, якщо він доступний
     username = message.from_user.username or f"telegram_user_{telegram_id}"
 
     try:
@@ -63,23 +75,18 @@ async def cmd_start(message: Message, state: FSMContext):
         )
 
         # Якщо user_created дорівнює False, але username змінився, оновлюємо
-        if not user_created and django_user.username != username:
+        if not user_created and await sync_to_async(lambda: django_user.username)() != username:
             django_user.username = username
-            await django_user.asave()
+            await sync_to_async(django_user.asave)()
 
         # 2. Потім створюємо або отримуємо UserProfile, використовуючи django_user
         user_profile, profile_created = await UserProfile.objects.aget_or_create(
             telegram_id=telegram_id,
             defaults={'user': django_user}
         )
-
-        # Якщо профіль вже існував, але був асоційований з іншим користувачем (що малоймовірно,
-        # якщо telegram_id unique), або якщо його user був None (виправили вище),
-        # переконаємося, що він правильно асоційований з поточним django_user.
-        if not profile_created and user_profile.user != django_user:
+        if not profile_created and await sync_to_async(lambda: user_profile.user)() != django_user:
             user_profile.user = django_user
-            await user_profile.asave()
-
+            await sync_to_async(user_profile.asave)()
 
         # Повідомлення користувачу
         if user_created or profile_created:
@@ -89,20 +96,11 @@ async def cmd_start(message: Message, state: FSMContext):
 
         # 3. Перевіряємо, чи існує LardiSearchFilter для цього користувача
         await LardiSearchFilter.objects.aget_or_create(user=user_profile)
-        # Якщо фільтр вже існує, aget_or_create просто поверне його, не створюючи новий.
-        # Якщо фільтра немає, він буде створений з default-значеннями, як ви вказали у моделі.
 
     except Exception as e:
-        # Обробка можливих помилок при роботі з БД
         await message.answer(f"Виникла помилка під час реєстрації: {e}")
-        print(f"Error during user registration: {e}") # Для логування
-        return # Не продовжуємо, якщо реєстрація не вдалася
-
-    # Відправляємо головне меню
-    await message.answer(
-        settings_manager.get("text_main_menu"),
-        reply_markup=get_main_menu_keyboard()
-    )
+        print(f"Error during user registration: {e}")
+        return
 
 
 @router.callback_query(F.data == "start_menu")
@@ -118,52 +116,46 @@ async def cb_start_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-def add_line(text: str, value: str, important: bool = False) -> str:
-    """Додає рядок лише якщо значення непорожнє або якщо це важливе поле."""
-    if value or important:
-        return f"{text}{value}\n"
-    return ""
-
-
 @router.callback_query(F.data == "search_offers")
 async def cb_search_offers(callback: CallbackQuery):
     """
     Обробник для кнопки "Пошук вантажів".
     Тут буде реалізована логіка пошуку вантажів за замовчуванням
-    або з використанням встановлених фільтрів.
+    або з використанням встановлених фільтрів користувача.
     """
-    await callback.message.edit_text("Завантажую останні вантажі...")
+    await callback.answer(text="Шукаю вантажі...", show_alert=False)
+
     try:
-        # Використання класу LardiClient для завантаження даних
-        data = lardi_client.load_data()
+        telegram_id = callback.from_user.id
+
+        user_profile, created = await UserProfile.objects.aget_or_create(telegram_id=telegram_id)
+
+        lardi_filter_obj, created_filter = await LardiSearchFilter.objects.aget_or_create(user=user_profile)
+
+        user_filters = user_filter_to_dict(lardi_filter_obj) if user_filter_to_dict(lardi_filter_obj) else lardi_client.filters
+
+        data = lardi_client.get_proposals(filters=user_filters)
         results = data.get("result", {}).get("proposals", {})
 
         if not results:
             await callback.message.answer("🔍 Нічого не знайдено за вашими критеріями.", reply_markup=get_back_to_main_menu_button())
             return
 
-        response_text = "📋 *Знайдені вантажі:*\n\n"
-        for i, item in enumerate(results[:5], 1):  # Вивід обмежено
-            print(item)
+        # Відправляємо максимум 5 вантажів (як у вашому прикладі)
+        for i, item in enumerate(results[:5], 1):
             _id = item.get('id', '')
-
-            webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}.html?id={_id}"
             status = item.get('status', '')
 
             from_data = item.get("waypointListSource", [{}])[0]
             from_city = from_data.get("town", "Невідомо")
             from_region = from_data.get("region", "")
             from_country = from_data.get("countrySign", "")
-            from_lat = from_data.get("lat", "")
-            from_lon = from_data.get("lon", "")
             from_address = from_data.get('address', "")
 
             to_data = item.get("waypointListTarget", [{}])[0]
             to_city = to_data.get("town", "Невідомо")
             to_region = to_data.get("region", "")
             to_country = to_data.get("countrySign", "")
-            to_lat = to_data.get("lat", "")
-            to_lon = to_data.get("lon", "")
             to_address = to_data.get("address", "")
 
             cargo = item.get("gruzName", "—")
@@ -587,10 +579,20 @@ async def cb_filter_load_types_menu(callback: CallbackQuery, state: FSMContext):
     """
     Обробник для переходу в меню типів завантаження.
     """
+    telegram_id = callback.from_user.id
+
+    lardi_filter_obj = await LardiSearchFilter.objects.filter(user__telegram_id=telegram_id).afirst()
+
+    if not lardi_filter_obj:
+        user_profile, created = await UserProfile.objects.aget_or_create(telegram_id=telegram_id)
+        lardi_filter_obj = await LardiSearchFilter.objects.acreate(user=user_profile, **lardi_client.default_filters())
+
+    current_load_types = lardi_filter_obj.load_types if lardi_filter_obj.load_types is not None else []
+
     await state.set_state(FilterForm.load_types_menu)
     await callback.message.edit_text(
         settings_manager.get("text_select_load_types"),
-        reply_markup=get_load_types_filter_keyboard(lardi_client.filters.get("loadTypes", []))
+        reply_markup=get_load_types_filter_keyboard(current_load_types)
     )
     await callback.answer()
 
@@ -600,21 +602,39 @@ async def cb_toggle_load_type(callback: CallbackQuery, state: FSMContext):
     """
     Обробник для перемикання типу завантаження.
     """
+    telegram_id = callback.from_user.id
+
     load_type_to_toggle = callback.data.replace("toggle_load_type_", "")
 
-    current_load_types = lardi_client.filters.get("loadTypes", []).copy()
+    lardi_filter_obj = await LardiSearchFilter.objects.filter(user__telegram_id=telegram_id).afirst()
 
+    if not lardi_filter_obj:
+        # Це не повинно статися, якщо cb_filter_load_types_menu вже створив його,
+        # але на всяк випадок.
+        await callback.message.answer("Помилка: Не вдалося знайти ваші налаштування фільтрів. Спробуйте знову.")
+        await callback.answer()
+        return
+
+    current_load_types = lardi_filter_obj.load_types if lardi_filter_obj.load_types is not None else []
+
+    # 2. Оновлюємо список: додаємо або видаляємо тип
     if load_type_to_toggle in current_load_types:
         current_load_types.remove(load_type_to_toggle)
+        message_text = f"❌ Тип завантаження '{load_type_to_toggle}' вимкнено."
     else:
         current_load_types.append(load_type_to_toggle)
+        message_text = f"✅ Тип завантаження '{load_type_to_toggle}' увімкнено."
 
-    lardi_client.set_filter("loadTypes", current_load_types)
+    # 3. Зберігаємо оновлений список у базу даних
+    lardi_filter_obj.load_types = current_load_types
+    await lardi_filter_obj.asave() # Використовуємо async save
 
+    # 4. Оновлюємо клавіатуру, щоб відобразити зміни
     await callback.message.edit_reply_markup(
-        reply_markup=get_load_types_filter_keyboard(lardi_client.filters.get("loadTypes", []))
+        reply_markup=get_load_types_filter_keyboard(current_load_types)
     )
-    await callback.answer()
+    # Відправляємо тимчасове повідомлення про зміну статусу
+    await callback.answer(message_text, show_alert=False)
 
 
 @router.callback_query(F.data == "filter_payment_forms_menu")
@@ -643,16 +663,32 @@ async def cb_filter_boolean_options_menu(callback: CallbackQuery, state: FSMCont
     await callback.answer()
 
 
-@router.callback_query(F.data == "show_current_filters")
+@router.callback_query(FilterForm.main_menu, F.data == "show_current_filters")
 async def cb_show_current_filters(callback: CallbackQuery):
     """
     Обробник для показу поточних фільтрів.
+    Тепер показує фільтри користувача з бази даних.
     """
-    filters_json = json.dumps(lardi_client.filters, indent=2, ensure_ascii=False)
-    await callback.message.answer(
-        settings_manager.get("text_current_filters").format(filters_json=filters_json),
-        reply_markup=get_back_to_filter_main_menu_button()
-    )
+    try:
+        user_filter_obj = await get_user_filters_from_db(telegram_id=callback.from_user.id)
+
+        # Перетворюємо об'єкт фільтра на словник для відображення
+        # Доступ до атрибутів _meta.fields обгортаємо sync_to_async
+        filters_to_display = await sync_to_async(lambda: {
+            field.name: getattr(user_filter_obj, field.name)
+            for field in user_filter_obj._meta.fields
+            if field.name not in ['id', 'user', 'created_at', 'updated_at']  # Виключаємо службові поля
+        })()
+
+        filters_json = json.dumps(filters_to_display, indent=2, ensure_ascii=False)
+        await callback.message.edit_text(
+            settings_manager.get("text_current_filters").format(filters_json=filters_json),
+            reply_markup=get_back_to_filter_main_menu_button()
+        )
+    except Exception as e:
+        await callback.message.answer(f"Помилка при отриманні фільтрів: {e}")
+        print(f"Error showing current filters: {e}")
+
     await callback.answer()
 
 

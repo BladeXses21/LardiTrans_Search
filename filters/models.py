@@ -11,9 +11,9 @@ class LardiSearchFilter(models.Model):
                              help_text="Користувач, якому належить цей фільтр.")
 
     # Поля напрямків
-    direction_from = models.JSONField(default=dict, blank=True,
+    direction_from = models.JSONField(default={"directionRows": [{"countrySign": "UA"}]}, blank=True,
                                      help_text="Параметри напрямку завантаження (directionFrom).")
-    direction_to = models.JSONField(default=dict, blank=True,
+    direction_to = models.JSONField(default={"directionRows": [{"countrySign": "UA"}]}, blank=True,
                                    help_text="Параметри напрямку вивантаження (directionTo).")
 
     # Параметри вантажу
@@ -41,7 +41,7 @@ class LardiSearchFilter(models.Model):
                                   help_text="Список типів завантаження (top, side, back тощо).")
 
     # Форми оплати
-    payment_from_ids = models.JSONField(default=list, blank=True,
+    payment_form_ids = models.JSONField(default=list, blank=True,
                                         help_text="Список ID форм оплати.")
     payment_currency_id = models.IntegerField(default=4, help_text="ID валюти оплати (4 для UAH).")
     payment_value = models.FloatField(null=True, blank=True, help_text="Значення оплати.")

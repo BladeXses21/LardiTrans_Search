@@ -4,7 +4,10 @@ import json
 import logging
 from dotenv import load_dotenv
 from modules.cookie_manager import CookieManager
-from typing import Optional
+from typing import Optional, Dict, Any, List
+from django.contrib.auth.models import User
+from filters.models import LardiSearchFilter
+from users.models import UserProfile
 
 # Завантажуємо змінні середовища
 load_dotenv()
@@ -86,7 +89,7 @@ class LardiClient:
             "origin": "https://lardi-trans.com",
             "referer": "https://lardi-trans.com/log/search/gruz/",
             "user-agent": "Mozilla/5.0",
-            "cookie": _cookie_manager.get_cookie_string(), # Беремо cookie з менеджера
+            "cookie": _cookie_manager.get_cookie_string(),
         }
 
     def default_filters(self):
@@ -101,7 +104,7 @@ class LardiClient:
             "dateFromISO": None,
             "dateToISO": None,
             "bodyTypeIds": [],
-            "loadTypes": ["top", "back", "side", "rack_off"], # Додано дефолтні значення
+            "loadTypes": [],
             "paymentFormIds": [2, 10],
             "groupage": False,
             "photos": False,
@@ -143,7 +146,7 @@ class LardiClient:
         # Для простих ключів - просто встановлюємо значення.
         self.filters[key] = value
 
-    def load_data(self, retry_count: int = 1) -> Optional[dict]:
+    def load_data(self, retry_count: int = 2) -> Optional[dict]:
         """
         Завантажує дані за поточними фільтрами.
         Реалізовано механізм повторної спроби у разі 401 помилки.
@@ -183,6 +186,54 @@ class LardiClient:
         except Exception as e:
             logger.error(f"Невідома помилка при завантаженні даних: {e}")
             raise Exception(f"Unknown Error: {e}")
+
+    def get_proposals(self, filters, retry_count: int = 3) -> Optional[dict]:
+        """
+        Завантажує дані за фільтрами користувача.
+        """
+
+        payload = {
+            "page": self.page,
+            "size": self.page_size,
+            "sortByCountryFirst": self.sort_by_country,
+            "filter": filters,
+        }
+
+        self._update_headers_with_cookies()
+
+        try:
+            print(payload)
+            response = requests.post(self.url, headers=self.headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 401:
+                logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
+                if retry_count > 0:
+                    if _cookie_manager.refresh_lardi_cookies():
+                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
+                        self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
+                        return self.get_proposals(retry_count - 1)  # Повторюємо запит
+                    else:
+                        logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
+                        raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
+                else:
+                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+                    raise Exception(f"Error {response.status_code}: {response.text}")
+            else:
+                logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
+                raise Exception(f"Error {response.status_code}: {response.text}")
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Помилка мережі при завантаженні даних: {e}")
+            raise Exception(f"Network Error: {e}")
+
+        except Exception as e:
+            logger.error(f"Невідома помилка при завантаженні даних: {e}")
+            raise Exception(f"Unknown Error: {e}")
+
+
 
     def update_cookie(self, new_cookie: str):
         """
