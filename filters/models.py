@@ -49,17 +49,17 @@ class LardiSearchFilter(models.Model):
                                           help_text="Тип значення оплати (TOTAL, PER_KG, PER_M3 тощо).")
 
     # Додаткові опції (булеві)
-    groupage = models.BooleanField(default=False, help_text="Чи шукати збірні вантажі.")
-    photos = models.BooleanField(default=False, help_text="Чи шукати вантажі з фото.")
-    show_ignore = models.BooleanField(default=False, help_text="Чи показувати ігноровані вантажі.")
-    only_actual = models.BooleanField(default=False, help_text="Чи показувати тільки актуальні вантажі.")
-    only_new = models.BooleanField(default=False, help_text="Чи показувати тільки нові вантажі.")
-    only_relevant = models.BooleanField(default=False, help_text="Чи показувати тільки релевантні вантажі.") # ДОДАНО ЦЕ ПОЛЕ
-    only_shippers = models.BooleanField(default=False, help_text="Чи показувати тільки відправників.")
-    only_carrier = models.BooleanField(default=False, help_text="Чи показувати тільки перевізників.")
-    only_expedition = models.BooleanField(default=False, help_text="Чи показувати тільки експедиторів.")
-    only_with_stavka = models.BooleanField(default=False, help_text="Чи показувати тільки вантажі зі ставкою.")
-    only_partners = models.BooleanField(default=False, help_text="Чи показувати тільки вантажі партнерів.")
+    groupage = models.BooleanField(default=False, help_text="Чи шукати збірні вантажі.") #  Чи шукати збірні вантажі. Це вантажі, які можуть бути об'єднані з іншими, щоб заповнити весь об'єм транспортного засобу.
+    photos = models.BooleanField(default=False, help_text="Чи шукати вантажі з фото.") # Чи шукати вантажі, до яких прикріплені фотографії. Це може бути корисно для візуальної оцінки вантажу або підтвердження його наявності.
+    show_ignore = models.BooleanField(default=False, help_text="Чи показувати ігноровані вантажі.") # Чи показувати вантажі, які ви раніше ігнорували/приховували. Зазвичай на Lardi є функціонал "ігнорувати пропозицію", щоб вона не відволікала. Ця опція, ймовірно, дозволяє їх знову бачити.
+    only_actual = models.BooleanField(default=False, help_text="Чи показувати тільки актуальні вантажі.") # Показувати тільки актуальні вантажі. Це може означати пропозиції, які ще не були прийняті, або ті, що мають найближчу дату завантаження/вивантаження.
+    only_new = models.BooleanField(default=False, help_text="Чи показувати тільки нові вантажі.") # Показувати тільки нові вантажі, які були нещодавно опубліковані.
+    only_relevant = models.BooleanField(default=False, help_text="Чи показувати тільки релевантні вантажі.") # Показувати тільки релевантні вантажі. Це може базуватися на історії ваших пошуків, уподобаннях або алгоритмах Lardi, які визначають, наскільки пропозиція відповідає вашому профілю.
+    only_shippers = models.BooleanField(default=False, help_text="Чи показувати тільки відправників.") # Показувати вантажі тільки від прямих відправників (власників вантажу), виключаючи експедиторів або перевізників, що перепродають вантажі.
+    only_carrier = models.BooleanField(default=False, help_text="Чи показувати тільки перевізників.") # Показувати вантажі тільки від прямих перевізників. Це менш типово для пошуку вантажів, оскільки ви самі шукаєте вантаж. Можливо, це стосується пошуку зворотних вантажів або пропозицій від перевізників, які шукають дозавантаження. (Або це помилкове поле для контексту "вантажів").
+    only_expedition = models.BooleanField(default=False, help_text="Чи показувати тільки експедиторів.") # Показувати вантажі тільки від експедиторів.
+    only_with_stavka = models.BooleanField(default=False, help_text="Чи показувати тільки вантажі зі ставкою.") # Показувати вантажі, у яких вказана ставка (ціна). Часто вантажі публікуються без ціни з пропозицією "договірна".
+    only_partners = models.BooleanField(default=False, help_text="Чи показувати тільки вантажі партнерів.") # Показувати вантажі тільки від партнерів або компаній, з якими у вас налагоджені партнерські відносини на Lardi.
 
     # Відстань
     distance_km_from = models.IntegerField(null=True, blank=True, help_text="Мінімальна відстань (км).")

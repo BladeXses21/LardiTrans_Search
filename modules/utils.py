@@ -73,3 +73,19 @@ def user_filter_to_dict(lardi_filter_obj) -> dict:
     }
 
     return user_filters
+
+
+boolean_options_names = {
+    "groupage": "Збірний вантаж",
+    "photos": "З фотографіями",
+    "show_ignore": "Показувати ігноровані (В розробці)",
+    "only_actual": "Тільки актуальні",
+    "only_new": "Тільки нові",
+    "only_relevant": "Тільки релевантні",
+    "only_shippers": "Тільки відправники",
+    "onlyCarrier": "Тільки перевізники",
+    "only_expedition": "Тільки експедитори",
+    "only_with_stavka": "Тільки зі ставкою",
+    "only_partners": "Тільки партнери",
+    "adr": "ADR вантаж",
+}

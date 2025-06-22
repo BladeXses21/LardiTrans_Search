@@ -3,6 +3,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from modules.app_config import settings_manager, env_config
 import json
 
+from modules.utils import boolean_options_names
+
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """
@@ -50,40 +52,50 @@ def get_filter_main_menu_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_cargo_params_filter_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
+def get_numeric_input_keyboard(param_name: str) -> InlineKeyboardMarkup:
     """
-    :param current_filters:
-    :return: Меню для зміни параметрів вантажу.
+    Повертає клавіатуру для вводу числових значень, включаючи кнопку "Скинути значення".
+    param_name: назва параметру, який скидається (наприклад, "mass1", "volume2")
     """
     builder = InlineKeyboardBuilder()
-    mass1 = current_filters.get("mass1", "Не встановлено")
-    mass2 = current_filters.get("mass2", "Не встановлено")
-    builder.row(InlineKeyboardButton(text=f"Маса від: {mass1} т.", callback_data="set_mass1"))
-    builder.row(InlineKeyboardButton(text=f"Маса до: {mass2} т.", callback_data="set_mass2"))
-
-    volume1 = current_filters.get("volume1", "Не встановлено")
-    volume2 = current_filters.get("volume2", "Не встановлено")
-    builder.row(InlineKeyboardButton(text=f"Об'єм від: {volume1} м3", callback_data="set_volume1"))
-    builder.row(InlineKeyboardButton(text=f"Об'єм до: {volume2} м3", callback_data="set_volume2"))
-
-    length1 = current_filters.get("length1", "Не встановлено")
-    length2 = current_filters.get("length2", "Не встановлено")
-    builder.row(InlineKeyboardButton(text=f"Довжина навантаження від: {length1} m/ldm", callback_data="set_length1"))
-    builder.row(InlineKeyboardButton(text=f"Довжина навантаження до: {length2} m/ldm", callback_data="set_length2"))
-
-    width1 = current_filters.get("width1", "Не встановлено")
-    width2 = current_filters.get("width2", "Не встановлено")
-    builder.row(InlineKeyboardButton(text=f"Ширина від: {width1} м.", callback_data="set_width1"))
-    builder.row(InlineKeyboardButton(text=f"Ширина до: {width2} м.", callback_data="set_width2"))
-
-    height1 = current_filters.get("height1", "Не встановлено")
-    height2 = current_filters.get("height2", "Не встановлено")
-    builder.row(InlineKeyboardButton(text=f"Висота від: {height1} м.", callback_data="set_height1"))
-    builder.row(InlineKeyboardButton(text=f"Висота до: {height2} м.", callback_data="set_height2"))
-
-    builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    builder.row(InlineKeyboardButton(text="❌ Відмінити", callback_data="cancel_input"))
+    builder.row(InlineKeyboardButton(text="🗑️ Скинути значення", callback_data=f"clear_{param_name}"))
     return builder.as_markup()
 
+
+def get_cargo_params_filter_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для меню параметрів вантажу з поточними значеннями фільтрів.
+    Приймає словник current_filters з поточними значеннями.
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Функція для отримання значення фільтра або "не вказано"
+    def get_filter_value(key1, key2=None):
+        val1 = current_filters.get(key1)
+        val2 = current_filters.get(key2) if key2 else None
+
+        if val1 is not None and val2 is not None:
+            return f"{val1}-{val2}"
+        elif val1 is not None:
+            return f"від {val1}"
+        elif val2 is not None:
+            return f"до {val2}"
+        return "не вказано"
+
+    builder.row(
+        InlineKeyboardButton(text=f"Маса: {get_filter_value('mass1', 'mass2')} т", callback_data="set_mass1"),
+        InlineKeyboardButton(text=f"Об'єм: {get_filter_value('volume1', 'volume2')} м³", callback_data="set_volume1")
+    )
+    builder.row(
+        InlineKeyboardButton(text=f"Довжина: {get_filter_value('length1', 'length2')} м", callback_data="set_length1"),
+        InlineKeyboardButton(text=f"Ширина: {get_filter_value('width1', 'width2')} м", callback_data="set_width1")
+    )
+    builder.row(
+        InlineKeyboardButton(text=f"Висота: {get_filter_value('height1', 'height2')} м", callback_data="set_height1")
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    return builder.as_markup()
 
 
 def get_load_types_filter_keyboard(current_load_types: list) -> InlineKeyboardMarkup:
@@ -107,6 +119,52 @@ def get_load_types_filter_keyboard(current_load_types: list) -> InlineKeyboardMa
     for load_type in all_load_types:
         emoji = "✅" if load_type in current_load_types else "❌"
         builder.row(InlineKeyboardButton(text=f"{emoji} {ua_names_load_types[load_type.lower()]}", callback_data=f"toggle_load_type_{load_type}"))
+
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    return builder.as_markup()
+
+
+def get_payment_forms_keyboard(selected_payment_forms: list) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для вибору форм оплати.
+    selected_payment_forms: список ідентифікаторів обраних форм оплати.
+    """
+    builder = InlineKeyboardBuilder()
+
+    all_payment_forms = {
+        2: "Готівка",
+        4: "Безготівка",
+        6: "Комбінована",
+        8: "Електронний платіж",
+        10: "Карта"
+    }
+
+    for form_id, form_name in all_payment_forms.items():
+        # Перетворюємо form_id на рядок для порівняння, якщо selected_payment_forms містить рядки
+        status = "✅" if form_id in selected_payment_forms else "❌"
+        builder.row(InlineKeyboardButton(text=f"{status} {form_name}", callback_data=f"toggle_payment_form_{form_id}"))
+
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    return builder.as_markup()
+
+
+def get_boolean_options_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для вибору булевих (true/false) опцій.
+    current_filters: словник з поточними значеннями булевих фільтрів.
+    """
+    builder = InlineKeyboardBuilder()
+    # Key: назва в моделі LardiSearchFilter
+    # Value: дружня назва для відображення в меню
+
+    for param_name, display_name in boolean_options_names.items():
+        # Отримуємо поточне значення. Якщо None, вважаємо False для відображення як "вимкнено"
+        # або ж явно вказуємо "не встановлено" якщо хочемо 3 стани
+        current_value = current_filters.get(param_name)
+
+        # Відображення стану: ✅ для True, ❌ для False/None
+        status = "✅" if current_value else "❌" # Якщо None, то буде ❌
+        builder.row(InlineKeyboardButton(text=f"{status} {display_name}", callback_data=f"toggle_boolean_{param_name}"))
 
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
     return builder.as_markup()
@@ -146,4 +204,3 @@ def get_cargo_details_webapp_keyboard(cargo_id: int) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="Деталі вантажу", web_app=WebAppInfo(url=webapp_url_with_id)))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data="start_menu"))
     return builder.as_markup()
-

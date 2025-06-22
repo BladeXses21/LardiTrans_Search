@@ -1,11 +1,14 @@
 import json
-import os
+
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.state import State
+from typing import Optional
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from asgiref.sync import sync_to_async
+from logger import logger
 
 from modules.app_config import settings_manager, env_config
 from modules.keyboards import (
@@ -17,12 +20,15 @@ from modules.keyboards import (
     get_load_types_filter_keyboard,
     get_reset_filters_confirm_keyboard,
     get_back_to_filter_main_menu_button,
-    get_cargo_details_webapp_keyboard
+    get_cargo_details_webapp_keyboard,
+    get_numeric_input_keyboard,
+    get_payment_forms_keyboard,
+    get_boolean_options_keyboard
 )
 from modules.fsm_states import LardiForm, FilterForm
 from modules.lardi_api_client import LardiClient, LardiOfferClient
 
-from modules.utils import date_format, add_line, user_filter_to_dict
+from modules.utils import date_format, add_line, user_filter_to_dict, boolean_options_names
 
 # --- Django моделі ---
 from django.contrib.auth.models import User
@@ -43,15 +49,19 @@ lardi_offer_client = LardiOfferClient()
 
 
 # Допоміжна функція для отримання фільтрів користувача
-async def get_user_filters_from_db(telegram_id: int) -> LardiSearchFilter:
+async def _get_or_create_lardi_filter(telegram_id: int) -> LardiSearchFilter:
     """
     Отримує об'єкт LardiSearchFilter для даного Telegram ID.
     Якщо об'єкт не існує, створює його з default_filters.
     """
     # Змінено: асинхронні методи ORM await-уємо напряму
-    user_profile = await UserProfile.objects.aget(telegram_id=telegram_id)
-    lardi_filter, created = await LardiSearchFilter.objects.aget_or_create(user=user_profile)
-    return lardi_filter
+    lardi_filter_obj = await LardiSearchFilter.objects.filter(user__telegram_id=telegram_id).afirst()
+    if not lardi_filter_obj:
+        user_profile, created = await UserProfile.objects.aget_or_create(telegram_id=telegram_id)
+        lardi_filter_obj = await LardiSearchFilter.objects.acreate(user=user_profile, **lardi_client.default_filters())
+        logger.info(f"Створено новий LardiSearchFilter для користувача {telegram_id}")
+    return lardi_filter_obj
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -342,16 +352,160 @@ async def cb_filter_directions_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _handle_set_numeric_param(callback: CallbackQuery, state: FSMContext,
+                                     param_name: str, prompt_text: str, current_value: Optional[float]):
+    """
+    Загальний обробник для ініціалізації введення числових параметрів.
+    """
+    await state.set_state(getattr(FilterForm, f"waiting_for_{param_name}"))
+    current_val_str = f"{current_value}" if current_value is not None else 'не встановлено'
+    await callback.message.edit_text(
+        f"{prompt_text} Поточне значення: {current_val_str}",
+        reply_markup=get_numeric_input_keyboard(param_name)
+    )
+    await callback.answer()
+
+
+async def _process_numeric_param_input(message: Message, state: FSMContext,
+                                         param_name: str, next_state: State,
+                                         prompt_text_next: Optional[str] = None,
+                                         validation_key: Optional[str] = None,
+                                         min_value: Optional[float] = None):
+    """
+    Загальний обробник для обробки введених числових значень фільтрів.
+    param_name: назва поля в LardiSearchFilter (наприклад, "mass1", "mass2")
+    next_state: наступний FSM стан після успішного введення
+    prompt_text_next: текст, який буде відправлений, якщо є наступний крок
+    validation_key: ключ для даних стану FSM, щоб зберігати попереднє значення для валідації (наприклад, "mass1" для перевірки mass2)
+    min_value: мінімальне значення для валідації (наприклад, якщо param_name - це mass2, а validation_key - mass1, то min_value буде значенням mass1)
+    """
+    telegram_id = message.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+
+    try:
+        value = float(message.text.replace(',', '.'))
+        if value < 0:
+            raise ValueError(settings_manager.get("text_invalid_number_input"))
+
+        # Валідація "до" значення (mass2, volume2, etc.)
+        if validation_key:
+            user_data = await state.get_data()
+            prev_value = user_data.get(validation_key)
+            # Отримаємо актуальне значення з lardi_filter_obj, якщо воно не в FSM (наприклад, якщо користувач змінив mass2 без зміни mass1)
+            if prev_value is not None and value < prev_value:
+                await message.answer(
+                    f"Максимальне значення не може бути меншим за мінімальне ({validation_key.replace('1','')} від: {prev_value}). Спробуйте ще раз.",
+                    reply_markup=get_numeric_input_keyboard(param_name)
+                )
+                return
+
+        # Зберігаємо значення в моделі LardiSearchFilter
+        setattr(lardi_filter_obj, param_name, value)
+        await lardi_filter_obj.asave()
+
+        # Зберігаємо значення в FSM контексті для подальших перевірок
+        await state.update_data({param_name: value})
+
+        if next_state == FilterForm.cargo_params_menu:
+            await state.clear() # Очищаємо всі дані FSM context
+            lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
+            current_filters_dict = user_filter_to_dict(lardi_filter_obj_reloaded)
+            await message.answer(
+                settings_manager.get("text_mass_updated").replace("Маса", prompt_text_next), # Тут prompt_text_next буде як "Маса", "Об'єм" і т.д.
+                reply_markup=get_cargo_params_filter_keyboard(current_filters_dict)
+            )
+            await state.set_state(FilterForm.cargo_params_menu) # Повертаємось до меню параметрів
+        else:
+            await state.set_state(next_state)
+            await message.answer(prompt_text_next, reply_markup=get_numeric_input_keyboard(param_name=param_name.replace('1', '2')))
+
+    except ValueError as e:
+        await message.answer(f"Невірний формат. Будь ласка, введіть числове значення. {e}", reply_markup=get_numeric_input_keyboard(param_name=param_name))
+    except Exception as e:
+        logger.error(f"Помилка при обробці вводу для {param_name}: {e}")
+        await message.answer("Виникла невідома помилка. Спробуйте ще раз.", reply_markup=get_numeric_input_keyboard(param_name=param_name))
+
+
 @router.callback_query(F.data == "filter_cargo_params_menu")
 async def cb_filter_cargo_params_menu(callback: CallbackQuery, state: FSMContext):
     """
     Обробник для переходу в меню параметрів вантажу.
     """
+    telegram_id = callback.from_user.id
+    lardi_client_obj = await _get_or_create_lardi_filter(telegram_id=telegram_id)
+
+    # Збираємо словник фільтрів з об'єктами моделі
+    current_filters_dict = user_filter_to_dict(lardi_filter_obj=lardi_client_obj)
+
     await state.set_state(FilterForm.cargo_params_menu)
     await callback.message.edit_text(
         "Оберіть параметр вантажу для зміни:",
-        reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters)
+        reply_markup=get_cargo_params_filter_keyboard(current_filters_dict)
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("clear_"))  # Обробляє будь-який стан
+async def cb_clear_numeric_param(callback: CallbackQuery, state: FSMContext):
+    telegram_id = callback.from_user.id
+    # Отримуємо назву параметра з callback_data (наприклад, "clear_mass1" -> "mass1")
+    param_to_clear = callback.data.replace("clear_", "")
+
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+
+    # Встановлюємо значення параметра в None
+    setattr(lardi_filter_obj, param_to_clear, None)
+    await lardi_filter_obj.asave()
+
+    # Очищаємо даний параметр зі стану FSM, якщо він там був
+    user_data = await state.get_data()
+    if param_to_clear in user_data:
+        del user_data[param_to_clear]
+        await state.set_data(user_data)
+
+    # Перевіряємо, чи це був "перший" параметр (mass1, volume1, etc.)
+    # Якщо так, то ми також скидаємо "другий" параметр (mass2, volume2, etc.)
+    if param_to_clear.endswith('1'):
+        param_to_clear_2 = param_to_clear.replace('1', '2')
+        if hasattr(lardi_filter_obj, param_to_clear_2):
+            setattr(lardi_filter_obj, param_to_clear_2, None)
+            await lardi_filter_obj.asave()  # Зберігаємо знову після обнулення другого параметра
+            if param_to_clear_2 in user_data:
+                del user_data[param_to_clear_2]
+                await state.set_data(user_data)
+        message_text_part = f"{param_to_clear.replace('1', '').capitalize()} (та {param_to_clear_2.replace('2', '')}) скинуто."
+    else:
+        message_text_part = f"{param_to_clear.capitalize()} скинуто."
+
+    # Повертаємо користувача до меню параметрів вантажу та оновлюємо клавіатуру
+    await state.clear()  # Очищаємо весь стан, оскільки значення скинуто
+    lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)  # Перезавантажуємо для актуальних значень
+    current_filters_dict = user_filter_to_dict(lardi_filter_obj_reloaded)
+
+    await callback.message.edit_text(
+        f"✅ {message_text_part}\nОберіть параметр вантажу для зміни:",
+        reply_markup=get_cargo_params_filter_keyboard(current_filters_dict)
+    )
+    await state.set_state(FilterForm.cargo_params_menu)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_input")
+async def cb_cancel_input(callback: CallbackQuery, state: FSMContext):
+    """
+    Обробник для кнопки "Відмінити" під час введення числових значень.
+    Повертає користувача до меню параметрів вантажу.
+    """
+    await state.clear() # Очищаємо стан
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    current_filters_dict = user_filter_to_dict(lardi_filter_obj)
+
+    await callback.message.edit_text(
+        "Введення скасовано.\nОберіть параметр вантажу для зміни:",
+        reply_markup=get_cargo_params_filter_keyboard(current_filters_dict)
+    )
+    await state.set_state(FilterForm.cargo_params_menu)
     await callback.answer()
 
 
@@ -360,32 +514,18 @@ async def cb_set_mass1(callback: CallbackQuery, state: FSMContext):
     """
     Запит на введення мінімальної маси.
     """
-    await state.set_state(FilterForm.waiting_for_mass1)
-    await callback.message.edit_text(
-        settings_manager.get("text_enter_mass_from"),
-        reply_markup=get_cancel_keyboard()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "mass1", "Введіть мінімальну масу (у тоннах), наприклад: 1.5", lardi_filter_obj.mass1
     )
-    await callback.answer()
 
 
 @router.message(FilterForm.waiting_for_mass1)
 async def process_mass1_input(message: Message, state: FSMContext):
-    """
-    Обробка введеної мінімальної маси.
-    """
-    try:
-        mass1 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("mass1", mass1)
-        await state.set_state(FilterForm.cargo_params_menu)  # Повертаємось у меню параметрів вантажу
-        await message.answer(
-            settings_manager.get("text_mass_updated"),
-            reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters)
-        )
-    except ValueError:
-        await message.answer(
-            settings_manager.get("text_invalid_number_input"),
-            reply_markup=get_cancel_keyboard()
-        )
+    await _process_numeric_param_input(
+        message, state, "mass1", FilterForm.waiting_for_mass2, "Введіть максимальну масу (у тоннах), наприклад: 20"
+    )
 
 
 @router.callback_query(F.data == "set_mass2")
@@ -393,185 +533,147 @@ async def cb_set_mass2(callback: CallbackQuery, state: FSMContext):
     """
     Запит на введення максимальної маси.
     """
-    await state.set_state(FilterForm.waiting_for_mass2)
-    await callback.message.edit_text(
-        settings_manager.get("text_enter_mass_to"),
-        reply_markup=get_cancel_keyboard()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "mass2", "Введіть максимальну масу (у тоннах), наприклад: 20", lardi_filter_obj.mass2
     )
-    await callback.answer()
 
 
 @router.message(FilterForm.waiting_for_mass2)
 async def process_mass2_input(message: Message, state: FSMContext):
-    """
-    Обробка введеної максимальної маси.
-    """
-    try:
-        mass2 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("mass2", mass2)
-        await state.set_state(FilterForm.cargo_params_menu)  # Повертаємось у меню параметрів вантажу
-        await message.answer(
-            settings_manager.get("text_mass_updated"),
-            reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters)
-        )
-    except ValueError:
-        await message.answer(
-            settings_manager.get("text_invalid_number_input"),
-            reply_markup=get_cancel_keyboard()
-        )
+    await _process_numeric_param_input(
+        message, state, "mass2", FilterForm.cargo_params_menu, "Маса", validation_key="mass1"
+    )
 
 
 # НОВІ ОБРОБНИКИ ДЛЯ ІНШИХ ПАРАМЕТРІВ ВАНТАЖУ (об'єм, довжина, ширина, висота)
 @router.callback_query(F.data == "set_volume1")
 async def cb_set_volume1(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_volume1)
-    await callback.message.edit_text("Введіть мінімальний об'єм (у м³), наприклад: 10", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "volume1", "Введіть мінімальний об'єм (у м³), наприклад: 1.0", lardi_filter_obj.volume1
+    )
 
 
 @router.message(FilterForm.waiting_for_volume1)
 async def process_volume1_input(message: Message, state: FSMContext):
-    try:
-        volume1 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("volume1", volume1)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Об'єм"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "volume1", FilterForm.waiting_for_volume2, "Введіть максимальний об'єм (у м³), наприклад: 10.0"
+    )
 
 
 @router.callback_query(F.data == "set_volume2")
 async def cb_set_volume2(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_volume2)
-    await callback.message.edit_text("Введіть максимальний об'єм (у м³), наприклад: 100", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "volume2", "Введіть максимальний об'єм (у м³), наприклад: 10.0", lardi_filter_obj.volume2
+    )
 
 
 @router.message(FilterForm.waiting_for_volume2)
 async def process_volume2_input(message: Message, state: FSMContext):
-    try:
-        volume2 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("volume2", volume2)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Об'єм"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "volume2", FilterForm.cargo_params_menu, "Об'єм", validation_key="volume1"
+    )
 
 
 @router.callback_query(F.data == "set_length1")
 async def cb_set_length1(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_length1)
-    await callback.message.edit_text("Введіть мінімальну довжину (у м.), наприклад: 5", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "length1", "Введіть мінімальну довжину (у м/ldm), наприклад: 13.6", lardi_filter_obj.length1
+    )
 
 
 @router.message(FilterForm.waiting_for_length1)
 async def process_length1_input(message: Message, state: FSMContext):
-    try:
-        length1 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("length1", length1)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Довжина"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "length1", FilterForm.waiting_for_length2, "Введіть максимальну довжину (у м/ldm), наприклад: 13.6"
+    )
 
 
 @router.callback_query(F.data == "set_length2")
 async def cb_set_length2(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_length2)
-    await callback.message.edit_text("Введіть максимальну довжину (у м.), наприклад: 13.6", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "length2", "Введіть максимальну довжину (у м/ldm), наприклад: 13.6", lardi_filter_obj.length2
+    )
 
 
 @router.message(FilterForm.waiting_for_length2)
 async def process_length2_input(message: Message, state: FSMContext):
-    try:
-        length2 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("length2", length2)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Довжина"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "length2", FilterForm.cargo_params_menu, "Довжина", validation_key="length1"
+    )
 
 
 @router.callback_query(F.data == "set_width1")
 async def cb_set_width1(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_width1)
-    await callback.message.edit_text("Введіть мінімальну ширину (у м.), наприклад: 2.2", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "width1", "Введіть мінімальну ширину (у м.), наприклад: 2.2", lardi_filter_obj.width1
+    )
 
 
 @router.message(FilterForm.waiting_for_width1)
 async def process_width1_input(message: Message, state: FSMContext):
-    try:
-        width1 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("width1", width1)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Ширина"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "width1", FilterForm.waiting_for_width2, "Введіть максимальну ширину (у м.), наприклад: 2.5"
+    )
 
 
 @router.callback_query(F.data == "set_width2")
 async def cb_set_width2(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_width2)
-    await callback.message.edit_text("Введіть максимальну ширину (у м.), наприклад: 2.5", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "width2", "Введіть максимальну ширину (у м.), наприклад: 2.5", lardi_filter_obj.width2
+    )
 
 
 @router.message(FilterForm.waiting_for_width2)
 async def process_width2_input(message: Message, state: FSMContext):
-    try:
-        width2 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("width2", width2)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Ширина"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "width2", FilterForm.cargo_params_menu, "Ширина", validation_key="width1"
+    )
 
 
 @router.callback_query(F.data == "set_height1")
 async def cb_set_height1(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_height1)
-    await callback.message.edit_text("Введіть мінімальну висоту (у м.), наприклад: 2.0", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "height1", "Введіть мінімальну висоту (у м.), наприклад: 2.0", lardi_filter_obj.height1
+    )
 
 
 @router.message(FilterForm.waiting_for_height1)
 async def process_height1_input(message: Message, state: FSMContext):
-    try:
-        height1 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("height1", height1)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Висота"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "height1", FilterForm.waiting_for_height2, "Введіть максимальну висоту (у м.), наприклад: 2.5"
+    )
 
 
 @router.callback_query(F.data == "set_height2")
 async def cb_set_height2(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(FilterForm.waiting_for_height2)
-    await callback.message.edit_text("Введіть максимальну висоту (у м.), наприклад: 3.0", reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    await _handle_set_numeric_param(
+        callback, state, "height2", "Введіть максимальну висоту (у м.), наприклад: 2.5", lardi_filter_obj.height2
+    )
 
 
 @router.message(FilterForm.waiting_for_height2)
 async def process_height2_input(message: Message, state: FSMContext):
-    try:
-        height2 = float(message.text.replace(',', '.'))
-        lardi_client.set_filter("height2", height2)
-        await state.set_state(FilterForm.cargo_params_menu)
-        await message.answer(settings_manager.get("text_mass_updated").replace("Маса", "Висота"),
-                             reply_markup=get_cargo_params_filter_keyboard(lardi_client.filters))
-    except ValueError:
-        await message.answer(settings_manager.get("text_invalid_number_input"), reply_markup=get_cancel_keyboard())
+    await _process_numeric_param_input(
+        message, state, "height2", FilterForm.cargo_params_menu, "Висота", validation_key="height1"
+    )
 
 
 @router.callback_query(F.data == "filter_load_types_menu")
@@ -642,25 +744,139 @@ async def cb_filter_payment_forms_menu(callback: CallbackQuery, state: FSMContex
     """
     Обробник для переходу в меню налаштувань форм оплати.
     """
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id=telegram_id)
+
+    # `payment_forms` в моделі - це список цілих чисел.
+    # Якщо воно None або порожній список, використовуємо порожній список для відображення.
+    current_payment_forms = lardi_filter_obj.payment_form_ids if lardi_filter_obj.payment_form_ids is not None else []
+
     await state.set_state(FilterForm.payment_forms_menu)
     await callback.message.edit_text(
-        settings_manager.get("text_payment_forms_filter_menu"),
-        reply_markup=get_back_to_filter_main_menu_button()
+        settings_manager.get("text_select_payment_forms"),
+        reply_markup=get_payment_forms_keyboard(current_payment_forms)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("toggle_payment_form_"))
+async def cb_toggle_payment_form(callback: CallbackQuery):
+    """
+    Обробник для перемикання статусу форми оплати.
+    """
+    telegram_id = callback.from_user.id
+    form_id_to_toggle = int(callback.data.replace("toggle_payment_form_", "")) # Отримуємо ID форми оплати як int
+
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+    current_payment_forms = lardi_filter_obj.payment_form_ids if lardi_filter_obj.payment_form_ids is not None else []
+
+    # Допоміжний словник для назв форм оплати (для повідомлень)
+    payment_forms_names = {
+        2: "Готівка",
+        4: "Безготівка",
+        6: "Комбінована",
+        8: "Електронний платіж",
+        10: "Карта"
+    }
+    form_name = payment_forms_names.get(form_id_to_toggle, f"Невідома форма ({form_id_to_toggle})")
+
+    if form_id_to_toggle in current_payment_forms:
+        current_payment_forms.remove(form_id_to_toggle)
+        message_text = f"❌ Форма оплати '{form_name}' вимкнена."
+    else:
+        current_payment_forms.append(form_id_to_toggle)
+        message_text = f"✅ Форма оплати '{form_name}' увімкнена."
+
+    # Зберігаємо оновлений список
+    lardi_filter_obj.payment_form_ids = current_payment_forms
+    await lardi_filter_obj.asave()
+
+    # Оновлюємо клавіатуру
+    await callback.message.edit_reply_markup(
+        reply_markup=get_payment_forms_keyboard(current_payment_forms)
+    )
+    await callback.answer(message_text, show_alert=False)
 
 
 @router.callback_query(F.data == "filter_boolean_options_menu")
 async def cb_filter_boolean_options_menu(callback: CallbackQuery, state: FSMContext):
     """
-    Обробник для переходу в меню налаштувань додаткових опцій.
+    Обробник для переходу в меню додаткових булевих опцій.
     """
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+
+    # Передаємо об'єкт фільтра, щоб клавіатура могла прочитати всі булеві поля
+    # Ми перетворюємо його на dict для зручності використання в get_boolean_options_keyboard
+    current_filters_dict = user_filter_to_dict(lardi_filter_obj)
+
     await state.set_state(FilterForm.boolean_options_menu)
     await callback.message.edit_text(
         settings_manager.get("text_boolean_options_filter_menu"),
-        reply_markup=get_back_to_filter_main_menu_button()
+        reply_markup=get_boolean_options_keyboard(current_filters_dict)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("toggle_boolean_"))
+async def cb_toggle_boolean_option(callback: CallbackQuery):
+    """
+    Обробник для перемикання статусу булевої опції.
+    """
+    # todo - перевірити "Які ж насправді значення повинні бути у полях у цьому фільтрі. Адже деякі з них є булевими значеннями, а наприклад adr може бути null
+    #  В такому випадку потрібно буде переробити"
+
+    # todo - додати повернення фільтрів до стандартного значення через кнопку.
+    telegram_id = callback.from_user.id
+    param_name = callback.data.replace("toggle_boolean_", "")
+
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+
+    # Отримуємо поточне значення. Якщо None, інтерпретуємо як False для перемикання
+    current_value = getattr(lardi_filter_obj, param_name, None)
+
+    # Встановлюємо новий стан
+    # Якщо поточне значення True, ставимо False. Якщо False або None, ставимо True
+    new_value = False if current_value else True
+
+    # Перевіряємо, чи є реальна зміна перед оновленням
+    if getattr(lardi_filter_obj, param_name) == new_value:
+        # Значення вже таке ж, як ми хочемо встановити.
+        # Можливо, користувач натиснув двічі або сталася якась синхронізація.
+        # Просто оновлюємо відповідь на callback, але не намагаємося редагувати клавіатуру.
+        display_name = boolean_options_names.get(param_name, param_name)
+        status_text = "увімкнено" if new_value else "вимкнено"
+        message_text = f"✅ Опція '{display_name}' {status_text} (без змін)."
+        await callback.answer(message_text, show_alert=False)
+        return  # Виходимо з функції, щоб уникнути edit_reply_markup
+
+    setattr(lardi_filter_obj, param_name, new_value)
+    await lardi_filter_obj.asave()
+
+    display_name = boolean_options_names.get(param_name, param_name)
+
+    status_text = "увімкнено" if new_value else "вимкнено"
+    message_text = f"✅ Опція '{display_name}' {status_text}."
+
+    # Перезавантажуємо фільтр для відображення актуальних даних на клавіатурі
+    lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
+    current_filters_dict_reloaded = user_filter_to_dict(lardi_filter_obj_reloaded)
+
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=get_boolean_options_keyboard(current_filters_dict_reloaded)
+        )
+    except TelegramBadRequest as e:
+        # Ця помилка означає, що клавіатура вже ідентична.
+        # Ми можемо її ігнорувати, оскільки бажаний стан досягнуто.
+        if "message is not modified" in str(e):
+            logger.warning(f"Message not modified for user {telegram_id}: {e}")
+        else:
+            # Якщо це інша помилка TelegramBadRequest, перепосилаємо її
+            raise
+    finally:
+        # Завжди відповідаємо на callback, навіть якщо сталася помилка редагування
+        await callback.answer(message_text, show_alert=False)
 
 
 @router.callback_query(FilterForm.main_menu, F.data == "show_current_filters")
@@ -670,7 +886,7 @@ async def cb_show_current_filters(callback: CallbackQuery):
     Тепер показує фільтри користувача з бази даних.
     """
     try:
-        user_filter_obj = await get_user_filters_from_db(telegram_id=callback.from_user.id)
+        user_filter_obj = await _get_or_create_lardi_filter(telegram_id=callback.from_user.id)
 
         # Перетворюємо об'єкт фільтра на словник для відображення
         # Доступ до атрибутів _meta.fields обгортаємо sync_to_async
