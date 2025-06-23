@@ -807,7 +807,6 @@ async def cb_filter_boolean_options_menu(callback: CallbackQuery, state: FSMCont
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
     # Передаємо об'єкт фільтра, щоб клавіатура могла прочитати всі булеві поля
-    # Ми перетворюємо його на dict для зручності використання в get_boolean_options_keyboard
     current_filters_dict = user_filter_to_dict(lardi_filter_obj)
 
     await state.set_state(FilterForm.boolean_options_menu)
@@ -821,62 +820,72 @@ async def cb_filter_boolean_options_menu(callback: CallbackQuery, state: FSMCont
 @router.callback_query(F.data.startswith("toggle_boolean_"))
 async def cb_toggle_boolean_option(callback: CallbackQuery):
     """
-    Обробник для перемикання статусу булевої опції.
+    Обробник для перемикання статусу булевої опції (True <-> False).
     """
-    # todo - перевірити "Які ж насправді значення повинні бути у полях у цьому фільтрі. Адже деякі з них є булевими значеннями, а наприклад adr може бути null
-    #  В такому випадку потрібно буде переробити"
-
-    # todo - додати повернення фільтрів до стандартного значення через кнопку.
     telegram_id = callback.from_user.id
     param_name = callback.data.replace("toggle_boolean_", "")
 
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    # Отримуємо поточне значення. Якщо None, інтерпретуємо як False для перемикання
-    current_value = getattr(lardi_filter_obj, param_name, None)
+    # --- Debugging Start ---
+    # Отримуємо значення до зміни
+    current_value_before_set = getattr(lardi_filter_obj, param_name, False)
+    logger.info(f"User {telegram_id}: Toggling option '{param_name}'.")
+    logger.info(f"Before change - LardiFilter object state for '{param_name}': {current_value_before_set}")
+    # --- Debugging End ---
 
-    # Встановлюємо новий стан
-    # Якщо поточне значення True, ставимо False. Якщо False або None, ставимо True
-    new_value = False if current_value else True
+    new_value = not current_value_before_set
 
-    # Перевіряємо, чи є реальна зміна перед оновленням
-    if getattr(lardi_filter_obj, param_name) == new_value:
-        # Значення вже таке ж, як ми хочемо встановити.
-        # Можливо, користувач натиснув двічі або сталася якась синхронізація.
-        # Просто оновлюємо відповідь на callback, але не намагаємося редагувати клавіатуру.
-        display_name = boolean_options_names.get(param_name, param_name)
-        status_text = "увімкнено" if new_value else "вимкнено"
-        message_text = f"✅ Опція '{display_name}' {status_text} (без змін)."
-        await callback.answer(message_text, show_alert=False)
-        return  # Виходимо з функції, щоб уникнути edit_reply_markup
-
+    # Встановлюємо нове значення для об'єкта в пам'яті
     setattr(lardi_filter_obj, param_name, new_value)
+
+    # --- Debugging Start ---
+    logger.info(f"After setattr (in-memory) - LardiFilter object state for '{param_name}': {getattr(lardi_filter_obj, param_name, 'N/A')}")
+    # --- Debugging End ---
+
+    # Зберігаємо зміни в базу даних
     await lardi_filter_obj.asave()
 
-    display_name = boolean_options_names.get(param_name, param_name)
+    # --- КЛЮЧОВИЙ КРОК: Явно перезавантажуємо об'єкт з бази даних ---
+    # Це гарантує, що ми працюємо з найактуальнішим станом з БД,
+    # а не з можливим застарілим станом об'єкта в пам'яті.
+    lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
 
-    status_text = "увімкнено" if new_value else "вимкнено"
+    # --- Debugging Start ---
+    logger.info(f"After asave() and RELOAD - LardiFilter object state for '{param_name}': {getattr(lardi_filter_obj_reloaded, param_name, 'N/A')}")
+    # --- Debugging End ---
+
+    # Тепер перевіряємо, чи фактично змінилось значення в ПЕРЕЗАВАНТАЖЕНОМУ об'єкті
+    # Якщо значення в перезавантаженому об'єкті дорівнює тому, що було ДО ЗМІНИ,
+    # це означає, що збереження або перезавантаження не спрацювало належним чином,
+    # або значення в БД вже було таким, як ми намагалися встановити.
+    if getattr(lardi_filter_obj_reloaded, param_name) == current_value_before_set:
+        display_name = boolean_options_names.get(param_name, param_name)
+        status_text = "увімкнено" if current_value_before_set else "вимкнено" # Використовуємо значення до зміни, бо фактичної зміни не відбулось
+        await callback.answer(f"Опція '{display_name}' вже {status_text} (без змін).", show_alert=False)
+        return # Виходимо, оскільки немає чого змінювати
+
+    # Якщо ми дійшли сюди, то зміна відбулася і була успішно перезавантажена
+    display_name = boolean_options_names.get(param_name, param_name)
+    status_text = "увімкнено" if new_value else "вимкнено" # Використовуємо intended new_value для повідомлення
     message_text = f"✅ Опція '{display_name}' {status_text}."
 
-    # Перезавантажуємо фільтр для відображення актуальних даних на клавіатурі
-    lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
-    current_filters_dict_reloaded = user_filter_to_dict(lardi_filter_obj_reloaded)
+    # Генеруємо клавіатуру з ПЕРЕЗАВАНТАЖЕНОГО об'єкта
+    current_filters_dict_updated = user_filter_to_dict(lardi_filter_obj_reloaded)
 
     try:
         await callback.message.edit_reply_markup(
-            reply_markup=get_boolean_options_keyboard(current_filters_dict_reloaded)
+            reply_markup=get_boolean_options_keyboard(current_filters_dict_updated)
         )
     except TelegramBadRequest as e:
-        # Ця помилка означає, що клавіатура вже ідентична.
-        # Ми можемо її ігнорувати, оскільки бажаний стан досягнуто.
         if "message is not modified" in str(e):
-            logger.warning(f"Message not modified for user {telegram_id}: {e}")
+            logger.warning(f"Message reply markup not modified for user {telegram_id}: {e}")
         else:
-            # Якщо це інша помилка TelegramBadRequest, перепосилаємо її
-            raise
+            raise # Перевикидаємо інші помилки TelegramBadRequest
     finally:
-        # Завжди відповідаємо на callback, навіть якщо сталася помилка редагування
+        # Завжди відповідаємо на callback
         await callback.answer(message_text, show_alert=False)
+
 
 
 @router.callback_query(FilterForm.main_menu, F.data == "show_current_filters")

@@ -151,20 +151,19 @@ def get_payment_forms_keyboard(selected_payment_forms: list) -> InlineKeyboardMa
 def get_boolean_options_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
     """
     Клавіатура для вибору булевих (true/false) опцій.
-    current_filters: словник з поточними значеннями булевих фільтрів.
+    current_filters: словник з поточними значеннями булевих фільтрів (snake_case ключі).
     """
     builder = InlineKeyboardBuilder()
-    # Key: назва в моделі LardiSearchFilter
-    # Value: дружня назва для відображення в меню
 
     for param_name, display_name in boolean_options_names.items():
-        # Отримуємо поточне значення. Якщо None, вважаємо False для відображення як "вимкнено"
-        # або ж явно вказуємо "не встановлено" якщо хочемо 3 стани
-        current_value = current_filters.get(param_name)
+        # param_name буде snake_case (наприклад, "only_new")
+        current_value = current_filters.get(param_name, False) # Отримуємо значення за snake_case ключем
 
-        # Відображення стану: ✅ для True, ❌ для False/None
-        status = "✅" if current_value else "❌" # Якщо None, то буде ❌
-        builder.row(InlineKeyboardButton(text=f"{status} {display_name}", callback_data=f"toggle_boolean_{param_name}"))
+        status = "✅" if current_value is True else "❌"
+        button_text = f"{status} {display_name}"
+
+        # callback_data буде виглядати "toggle_boolean_only_new" (snake_case)
+        builder.row(InlineKeyboardButton(text=button_text, callback_data=f"toggle_boolean_{param_name}"))
 
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
     return builder.as_markup()
