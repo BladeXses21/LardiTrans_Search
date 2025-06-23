@@ -46,6 +46,7 @@ def get_filter_main_menu_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_load_types"), callback_data="filter_load_types_menu"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_payment_forms"), callback_data="filter_payment_forms_menu"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_boolean_options"), callback_data="filter_boolean_options_menu"))
+    builder.row(InlineKeyboardButton(text=settings_manager.get("text_distance_options"), callback_data="filter_distance_options"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_show_current_filters"), callback_data="show_current_filters"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_reset_filters"), callback_data="reset_filters_confirm"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data="start_menu"))
@@ -95,6 +96,19 @@ def get_cargo_params_filter_keyboard(current_filters: dict) -> InlineKeyboardMar
         InlineKeyboardButton(text=f"Висота: {get_filter_value('height1', 'height2')} м", callback_data="set_height1")
     )
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    return builder.as_markup()
+
+
+def get_distance_options_keyboard(current_load_types: list) -> InlineKeyboardMarkup:
+    """
+    :param current_load_types:
+    :return: Повертає меню налаштування відстані
+    """
+    builder = InlineKeyboardBuilder()
+
+    def get_filter_value(key1, key2=None):
+        pass
+
     return builder.as_markup()
 
 

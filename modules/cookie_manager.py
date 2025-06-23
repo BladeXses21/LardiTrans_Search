@@ -23,7 +23,7 @@ class CookieManager:
         self.cookies_file = cookies_file
         self.cookies = self._load_cookies()
         # Змінений URL сторінки входу, як вказано користувачем
-        self.login_url = "https://lardi-trans.com/log/settings/api/"
+        self.login_url = env_config.LARDI_LOGIN_URL
         self.username = env_config.LARDI_USERNAME
         self.password = env_config.LARDI_PASSWORD
 

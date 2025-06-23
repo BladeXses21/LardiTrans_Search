@@ -12,10 +12,11 @@ class EnvConfig:
     LARDI_COOKIE: str = os.getenv("LARDI_COOKIE", "") # Ця змінна більше не використовується для активних cookie, але залишиться для сумісності
     LARDI_USERNAME: str = os.getenv("LARDI_USERNAME", "") # Нова змінна для логіну Lardi-Trans
     LARDI_PASSWORD: str = os.getenv("LARDI_PASSWORD", "") # Нова змінна для пароля Lardi-Trans
+    LARDI_LOGIN_URL: str = os.getenv("LARDI_LOGIN_URL", "")
 
     # Виправлено типографічну помилку в домені для всіх URL
-    WEBAPP_BASE_URL: str = os.getenv("WEBAPP_BASE_URL", "https://a454-91-245-124-201.ngrok-free.app/webapp/cargo_details")
-    WEBAPP_API_PROXY_URL: str = os.getenv("WEBAPP_API_PROXY_URL", "https://a454-91-245-124-201.ngrok-free.app/api/cargo_details")
+    WEBAPP_BASE_URL: str = os.getenv("WEBAPP_BASE_URL", "https://9891-91-245-124-201.ngrok-free.app/webapp/cargo_details")
+    WEBAPP_API_PROXY_URL: str = os.getenv("WEBAPP_API_PROXY_URL", "https://9891-91-245-124-201.ngrok-free.app/api/cargo_details")
 
 
 env_config = EnvConfig()
@@ -47,6 +48,7 @@ class SettingsManager:
         "text_filter_payment_forms": "💰 Форма оплати",
         "text_filter_boolean_options": "☑️ Додаткові опції (Тільки нові, групові і т.д.)",
         "text_show_current_filters": "👁️ Показати поточні фільтри",
+        "text_distance_options": "🚩 Опції відстані",
         "text_reset_filters": "🔄 Скинути фільтри",
         "text_filters_reset_confirm": "Ви впевнені, що хочете скинути всі фільтри до значень за замовчуванням?",
         "text_filters_reset_done": "✅ Фільтри скинуто до значень за замовчуванням.",
@@ -56,9 +58,8 @@ class SettingsManager:
         "text_mass_updated": "✅ Маса оновлена!",
         "text_current_filters": "Поточні фільтри:\n```json\n{filters_json}\n```",
         "text_select_load_types": "Оберіть типи завантаження (натисніть, щоб увімкнути/вимкнути):",
-        "text_directions_filter_menu": "Тут будуть налаштування напрямків (звідки/куди).",
+        "text_directions_filter_menu": "Тут будуть налаштування напрямків (звідки/куди).\nНаразі UA -> UA",
         "text_select_payment_forms": "Оберіть форми оплати (натисніть, щоб увімкнути/вимкнути):",
-
         "text_boolean_options_filter_menu": "Оберіть додаткові опції (натисніть, щоб увімкнути/вимкнути):",
         "text_no_active_filters": "У вас немає активних фільтрів. Всі значення за замовчуванням.",
         "text_offer_details_unavailable": "Деталі вантажу наразі недоступні.",

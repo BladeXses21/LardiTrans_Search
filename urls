@@ -6,3 +6,6 @@ https://lardi-trans.com/webapi/proposal/offer/gruz/233984329976/awaiting/?curren
 Не вдалося завантажити деталі вантажу: Помилка мережі: 500 - {"error": "Failed to fetch cargo details: Error 401: {\"errorMessage\":\"\u041d\u0435 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u043e\u0432\u0430\u043d\u0438\u0439 \u043a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\",\"authTokenURL\":\"https://lardi-trans.com/accounts/token/\",\"authLoginURL\":\"https://lardi-trans.com/uk/accounts/login/\"}"}
 
 python -m modules.main
+
+cd c:/ngrok
+ngrok http 8080
