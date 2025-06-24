@@ -328,12 +328,13 @@ class LardiClient:
                 data = response.json()
                 proposals = data.get("result", {}).get("proposals", [])
                 logger.info(f"LardiAPI - INFO - Сторінка {page}: отримано {len(proposals)} вантажів")
-                if not proposals:
-                    break
-                all_proposals.extend(proposals)
+                logger.info(f"LardiAPI - INFO - Тип proposals: {type(proposals)} на сторінці {page}")
+                if not isinstance(proposals, list):
+                    logger.warning(f"LardiAPI - WARNING - proposals не є списком: {proposals}")
+                    proposals = []
+                all_proposals.extend([p for p in proposals if isinstance(p, dict)])
                 total_pages += 1
-                if len(proposals) < page_size:
-                    # this is last page
+                if not proposals or len(proposals) < page_size:
                     break
                 page += 1
             except Exception as e:
@@ -359,6 +360,10 @@ class LardiNotificationClient(LardiClient):
 
         new_offers = []
         for offer in all_offers:
+            if not isinstance(offer, dict):
+                logger.warning(f"OFFER - WARNING - Пропущено некоректний запис (не dict): {offer}")
+                continue
+            logger.info(f"OFFER - INFO - {offer}")
             created_at_str = offer.get('dateCreate')
             if created_at_str:
                 try:

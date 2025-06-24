@@ -3,15 +3,15 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
+import re
 
 from aiogram import Bot
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 
 from users.models import UserProfile
 from modules.lardi_api_client import lardi_notification_client
 from modules.keyboards import get_cargo_details_webapp_keyboard
-from modules.app_config import settings_manager, env_config
+from modules.app_config import settings_manager
 from modules.utils import add_line, date_format
 
 logger = logging.getLogger(__name__)
@@ -19,10 +19,23 @@ logger = logging.getLogger(__name__)
 NOTIFICATION_CHECK_INTERVAL = 50  # 5 хвилин у секундах
 
 
+def escape_markdown_v2(text: str) -> str:
+    """
+    Екранує всі спецсимволи для Telegram MarkdownV2.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    escape_chars = r'_*\[\]()~`>#+-=|{}.!'
+    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\1', text)
+
+
 async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Dict[str, Any]):
     """
     Надсилає користувачу повідомлення про новий вантаж.
     """
+    if not isinstance(cargo, dict):
+        logger.error(f"CARGO IS NOT DICT! {cargo}")
+        return
     cargo_id = cargo.get("id")
     if not cargo_id:
         logger.error(f"Відсутній ID вантажу для сповіщення користувача {user_profile.user.username}")
@@ -46,27 +59,12 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
 
     await update_cargo_skip(user_profile, cargo_id)
 
+    # Формування повідомлення з екранацією ВСІХ динамічних даних!
+    template = settings_manager.get("text_notification_new_cargo")
     # Формування повідомлення
-    message_text = settings_manager.get("text_notification_new_cargo").format(cargo_id=cargo_id)
-
-    message_text += add_line(settings_manager.get("text_from_short"), cargo.get("from").get("name"))
-    message_text += add_line(settings_manager.get("text_to_short"), cargo.get("to").get("name"))
-
-    mass = cargo.get("mass")
-    if mass:
-        message_text += add_line(settings_manager.get("text_mass"), f"{mass} т", important=True)
-
-    volume = cargo.get("volume")
-    if volume:
-        message_text += add_line(settings_manager.get("text_volume"), f"{volume} м³", important=True)
-
-    payment = cargo.get("payment")
-    if payment and payment.get("value"):
-        payment_value = payment.get("value")
-        payment_currency = payment.get("currencyName")
-        message_text += add_line(settings_manager.get("text_payment"), f"{payment_value} {payment_currency}", important=True)
-    else:
-        message_text += add_line(settings_manager.get("text_payment"), settings_manager.get("text_not_set"))
+    message_text = template.format(
+        cargo_id=escape_markdown_v2(cargo_id)
+    )
 
     created_at_str = cargo.get("createDate")
     if created_at_str:
@@ -83,22 +81,26 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
                 dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S')
                 dt_object = dt_object.replace(tzinfo=timezone.utc) # Припускаємо UTC, якщо немає зони
 
-            message_text += add_line(settings_manager.get("text_created"), date_format(created_at_str))
+            message_text += add_line(
+                escape_markdown_v2(settings_manager.get("text_created")),
+                escape_markdown_v2(date_format(created_at_str)),
+            )
         except ValueError as e:
             logger.warning(f"Не вдалося розпарсити дату створення вантажу '{created_at_str}': {e}")
-
 
     try:
         await bot.send_message(
             chat_id=user_profile.telegram_id,
             text=message_text,
             reply_markup=get_cargo_details_webapp_keyboard(cargo_id),
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
         logger.info(f"Надіслано сповіщення про вантаж {cargo_id} користувачу {user_profile.user.username}")
     except Exception as e:
-        logger.error(f"Не вдалося надіслати сповіщення користувачу {user_profile.user.username} (ID: {user_profile.telegram_id}): {e}")
-
+        logger.error(
+            f"Не вдалося надіслати сповіщення користувачу {user_profile.user.username} (ID: {user_profile.telegram_id}): {e}\n"
+            f"Текст повідомлення: {message_text}"
+        )
 
 @sync_to_async
 def get_active_notification_users() -> List[UserProfile]:
@@ -139,6 +141,7 @@ async def notification_checker(bot: Bot):
                     if new_cargos:
                         logger.info(f"Знайдено {len(new_cargos)} нових вантажів для {user_profile.user.username}.")
                         for cargo in new_cargos:
+                            await asyncio.sleep(0.3)
                             await send_cargo_notification(bot, user_profile, cargo)
                     else:
                         logger.info(f"Не знайдено нових вантажів для {user_profile.user.username}.")
