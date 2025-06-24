@@ -2,18 +2,31 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from modules.app_config import settings_manager, env_config
 import json
+from typing import Optional # Додаємо Optional
 
 from modules.utils import boolean_options_names
 
 
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(notifications_enable: Optional[bool] = None) -> InlineKeyboardMarkup:
     """
     Повертає головну клавіатуру меню бота.
+    Додано опціональний аргумент notifications_enabled для відображення стану сповіщень.
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_button_search"), callback_data="search_offers"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_button_view_offer"), callback_data="view_offer_by_id"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_button_change_filters"), callback_data="change_filters"))
+
+    # Додано кнопку для керування сповіщеннями
+    if notifications_enable is not None:
+        notification_button_text = (
+            settings_manager.get("text_button_notifications_enabled")
+            if notifications_enable else settings_manager.get("text_button_notifications_disabled")
+        )
+        builder.row(InlineKeyboardButton(text=notification_button_text, callback_data="notification_settings"))
+    else:
+        builder.row(InlineKeyboardButton(text=settings_manager.get("text_button_notifications"), callback_data="notification_settings"))
+
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_button_update_cookie"), callback_data="update_lardi_cookie"))
     return builder.as_markup()
 
@@ -216,4 +229,21 @@ def get_cargo_details_webapp_keyboard(cargo_id: int) -> InlineKeyboardMarkup:
     # Створюємо кнопку, яка відкриває Web App
     builder.row(InlineKeyboardButton(text="Деталі вантажу", web_app=WebAppInfo(url=webapp_url_with_id)))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data="start_menu"))
+    return builder.as_markup()
+
+
+def get_notification_settings_keyboard(notifications_enabled: bool) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для налаштувань сповіщень.
+    """
+    builder = InlineKeyboardBuilder()
+    if notifications_enabled:
+        button_text = settings_manager.get("text_button_notifications_disable")
+    else:
+        button_text = settings_manager.get("text_button_notifications_enable")
+
+    builder.row(
+        InlineKeyboardButton(text=button_text, callback_data="toggle_notifications")
+    )
+    builder.row(get_back_to_main_menu_button().inline_keyboard[0][0])
     return builder.as_markup()

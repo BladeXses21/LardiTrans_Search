@@ -1,7 +1,5 @@
 from datetime import datetime
 
-from modules.lardi_api_client import LardiClient
-
 
 def date_format(date_string: str) -> str:
     if date_string.endswith('+00:00'):

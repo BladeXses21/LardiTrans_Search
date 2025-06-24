@@ -1,9 +1,11 @@
 import os
+# Налаштування Django оточення
 import django
 
-# Налаштування Django оточення
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lardiweb.settings')
 django.setup()
+
+from modules.notifications_module import notification_checker # Імпортуємо notification_checker
 
 import asyncio
 import logging
@@ -60,14 +62,24 @@ async def main() -> None:
     web_site = web.TCPSite(web_runner, '0.0.0.0', 8080)
 
     # Запускаємо веб-сервер у фоновому режимі
-    await web_site.start()
+    web_server_task = asyncio.create_task(web_site.start())
     logger.info("Web server started on http://0.0.0.0:8080")
 
+    # Запускаємо фонову задачу для перевірки сповіщень
+    notification_task = asyncio.create_task(notification_checker(bot))
+    logger.info("Запущено фонову задачу перевірки сповіщень.")
+
     # Запускаємо бота
+    logger.info("Бот запущено!")
     await dp.start_polling(bot)
+
+    # Очікуємо завершення фонових задач (це може бути корисно при зупинці програми)
+    await web_server_task
+    await notification_task
 
 
 if __name__ == "__main__":
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

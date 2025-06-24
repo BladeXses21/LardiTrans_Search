@@ -4,6 +4,9 @@ from django.contrib.auth.models import User
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     telegram_id = models.BigIntegerField(unique=True)
+    notification_status = models.BooleanField(default=False)
+    notification_time = models.DateTimeField(default=None, null=True)
+    cargo_skip = models.JSONField(blank=True, null=True)
     extra_data = models.JSONField(blank=True, null=True) # Для додаткових налаштувань
 
     def __str__(self):

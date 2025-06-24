@@ -23,18 +23,21 @@ from modules.keyboards import (
     get_cargo_details_webapp_keyboard,
     get_numeric_input_keyboard,
     get_payment_forms_keyboard,
-    get_boolean_options_keyboard
+    get_boolean_options_keyboard,
+    get_notification_settings_keyboard,
 )
 from modules.fsm_states import LardiForm, FilterForm
 from modules.lardi_api_client import LardiClient, LardiOfferClient
 
 from modules.utils import date_format, add_line, user_filter_to_dict, boolean_options_names
+from datetime import datetime, timezone, timedelta
 
 # --- Django моделі ---
 from django.contrib.auth.models import User
 from filters.models import LardiSearchFilter
 from users.models import UserProfile
 from asgiref.sync import sync_to_async
+
 # ------
 
 router = Router()
@@ -42,6 +45,8 @@ router = Router()
 # Ініціалізація клієнтів Lardi
 lardi_client = LardiClient()
 lardi_offer_client = LardiOfferClient()
+
+INITIAL_NOTIFICATION_OFFSET_MINUTES = 5  # Вантажі за останні 10 хвилин
 
 
 # Ім'я бота для посилання на Web App
@@ -63,13 +68,29 @@ async def _get_or_create_lardi_filter(telegram_id: int) -> LardiSearchFilter:
     return lardi_filter_obj
 
 
+@sync_to_async
+def update_user_notification_status(user_profile: UserProfile, status: bool):
+    user_profile.notification_status = status
+    user_profile.notification_time = datetime.now(timezone.utc) if status else None
+    user_profile.cargo_skip = []
+    user_profile.save(update_fields=['notification_status', 'notification_time', 'cargo_skip'])
+
+
+@sync_to_async
+def get_user_profile(telegram_id: int) -> Optional[UserProfile]:
+    try:
+        return UserProfile.objects.get(telegram_id=telegram_id)
+    except UserProfile.DoesNotExist:
+        return None
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
     Обробник команди /start.
     Реєструє користувача та створює для нього фільтр за замовчуванням, якщо їх ще немає.
     """
-    await state.clear() # Очищуємо стан FSM
+    await state.clear()  # Очищуємо стан FSM
 
     telegram_id = message.from_user.id
     username = message.from_user.username or f"telegram_user_{telegram_id}"
@@ -98,11 +119,13 @@ async def cmd_start(message: Message, state: FSMContext):
             user_profile.user = django_user
             await sync_to_async(user_profile.asave)()
 
+        notifications_enabled = user_profile.notification_status
+
         # Повідомлення користувачу
         if user_created or profile_created:
-            await message.answer(settings_manager.get("user_create"), reply_markup=get_main_menu_keyboard())
+            await message.answer(settings_manager.get("user_create"), reply_markup=get_main_menu_keyboard(notifications_enabled))
         else:
-            await message.answer(settings_manager.get("user_comeback"), reply_markup=get_main_menu_keyboard())
+            await message.answer(settings_manager.get("user_comeback"), reply_markup=get_main_menu_keyboard(notifications_enabled))
 
         # 3. Перевіряємо, чи існує LardiSearchFilter для цього користувача
         await LardiSearchFilter.objects.aget_or_create(user=user_profile)
@@ -119,11 +142,65 @@ async def cb_start_menu(callback: CallbackQuery, state: FSMContext):
     Обробник для повернення в головне меню.
     """
     await state.clear()
+    user_profile = await get_user_profile(callback.from_user.id)
+    notifications_enabled = user_profile.notification_status if user_profile else False
     await callback.message.edit_text(
         settings_manager.get("text_welcome_message"),
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(notifications_enabled)
     )
     await callback.answer()
+
+
+# --- Обробники для сповіщень ---
+@router.callback_query(F.data == "notification_settings")
+async def cb_notification_settings(callback: CallbackQuery):
+    user_profile = await get_user_profile(callback.from_user.id)
+    if not user_profile:
+        await callback.message.answer(settings_manager.get("text_error_user_not_found"))
+        await callback.answer()
+        return
+
+    status_text = (
+        settings_manager.get("text_notifications_status_enabled")
+        if user_profile.notification_status
+        else settings_manager.get("text_notifications_status_disabled")
+    )
+    await callback.message.edit_text(
+        status_text,
+        reply_markup=get_notification_settings_keyboard(user_profile.notification_status)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "toggle_notifications")
+async def cb_toggle_notifications(callback: CallbackQuery):
+    user_profile = await get_user_profile(callback.from_user.id)
+    if not user_profile:
+        await callback.message.answer(settings_manager.get("text_error_user_not_found"))
+        await callback.answer()
+        return
+
+    new_status = not user_profile.notification_status
+    await update_user_notification_status(user_profile, new_status)
+
+    confirmation_text = (
+        settings_manager.get("text_notifications_toggle_success_enabled")
+        if new_status
+        else settings_manager.get("text_notifications_toggle_success_disabled")
+    )
+
+    # Оновлюємо головне меню з новим статусом сповіщень
+    main_menu_keyboard = get_main_menu_keyboard(new_status)
+    try:
+        await callback.message.edit_text(
+            settings_manager.get("text_welcome_message"),  # Можна залишити "Головне меню" або щось більш інформативне
+            reply_markup=main_menu_keyboard
+        )
+    except TelegramBadRequest:
+        # Якщо повідомлення не змінилось, просто оновлюємо клавіатуру
+        await callback.message.edit_reply_markup(reply_markup=main_menu_keyboard)
+
+    await callback.answer(confirmation_text)
 
 
 @router.callback_query(F.data == "search_offers")
@@ -305,9 +382,11 @@ async def cb_cancel_action(callback: CallbackQuery, state: FSMContext):
     Обробник для кнопки "Відмінити" в будь-якому стані FSM.
     """
     await state.clear()
+    user_profile = await get_user_profile(callback.from_user.id)
+    notifications_enabled = user_profile.notification_status if user_profile else False
     await callback.message.edit_text(
         settings_manager.get("text_welcome_message"),
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(notifications_enabled)
     )
     await callback.answer()
 
@@ -353,7 +432,7 @@ async def cb_filter_directions_menu(callback: CallbackQuery, state: FSMContext):
 
 
 async def _handle_set_numeric_param(callback: CallbackQuery, state: FSMContext,
-                                     param_name: str, prompt_text: str, current_value: Optional[float]):
+                                    param_name: str, prompt_text: str, current_value: Optional[float]):
     """
     Загальний обробник для ініціалізації введення числових параметрів.
     """
@@ -367,10 +446,10 @@ async def _handle_set_numeric_param(callback: CallbackQuery, state: FSMContext,
 
 
 async def _process_numeric_param_input(message: Message, state: FSMContext,
-                                         param_name: str, next_state: State,
-                                         prompt_text_next: Optional[str] = None,
-                                         validation_key: Optional[str] = None,
-                                         min_value: Optional[float] = None):
+                                       param_name: str, next_state: State,
+                                       prompt_text_next: Optional[str] = None,
+                                       validation_key: Optional[str] = None,
+                                       min_value: Optional[float] = None):
     """
     Загальний обробник для обробки введених числових значень фільтрів.
     param_name: назва поля в LardiSearchFilter (наприклад, "mass1", "mass2")
@@ -394,7 +473,7 @@ async def _process_numeric_param_input(message: Message, state: FSMContext,
             # Отримаємо актуальне значення з lardi_filter_obj, якщо воно не в FSM (наприклад, якщо користувач змінив mass2 без зміни mass1)
             if prev_value is not None and value < prev_value:
                 await message.answer(
-                    f"Максимальне значення не може бути меншим за мінімальне ({validation_key.replace('1','')} від: {prev_value}). Спробуйте ще раз.",
+                    f"Максимальне значення не може бути меншим за мінімальне ({validation_key.replace('1', '')} від: {prev_value}). Спробуйте ще раз.",
                     reply_markup=get_numeric_input_keyboard(param_name)
                 )
                 return
@@ -407,14 +486,14 @@ async def _process_numeric_param_input(message: Message, state: FSMContext,
         await state.update_data({param_name: value})
 
         if next_state == FilterForm.cargo_params_menu:
-            await state.clear() # Очищаємо всі дані FSM context
+            await state.clear()  # Очищаємо всі дані FSM context
             lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
             current_filters_dict = user_filter_to_dict(lardi_filter_obj_reloaded)
             await message.answer(
-                settings_manager.get("text_mass_updated").replace("Маса", prompt_text_next), # Тут prompt_text_next буде як "Маса", "Об'єм" і т.д.
+                settings_manager.get("text_mass_updated").replace("Маса", prompt_text_next),  # Тут prompt_text_next буде як "Маса", "Об'єм" і т.д.
                 reply_markup=get_cargo_params_filter_keyboard(current_filters_dict)
             )
-            await state.set_state(FilterForm.cargo_params_menu) # Повертаємось до меню параметрів
+            await state.set_state(FilterForm.cargo_params_menu)  # Повертаємось до меню параметрів
         else:
             await state.set_state(next_state)
             await message.answer(prompt_text_next, reply_markup=get_numeric_input_keyboard(param_name=param_name.replace('1', '2')))
@@ -496,7 +575,7 @@ async def cb_cancel_input(callback: CallbackQuery, state: FSMContext):
     Обробник для кнопки "Відмінити" під час введення числових значень.
     Повертає користувача до меню параметрів вантажу.
     """
-    await state.clear() # Очищаємо стан
+    await state.clear()  # Очищаємо стан
     telegram_id = callback.from_user.id
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
     current_filters_dict = user_filter_to_dict(lardi_filter_obj)
@@ -729,7 +808,7 @@ async def cb_toggle_load_type(callback: CallbackQuery, state: FSMContext):
 
     # 3. Зберігаємо оновлений список у базу даних
     lardi_filter_obj.load_types = current_load_types
-    await lardi_filter_obj.asave() # Використовуємо async save
+    await lardi_filter_obj.asave()  # Використовуємо async save
 
     # 4. Оновлюємо клавіатуру, щоб відобразити зміни
     await callback.message.edit_reply_markup(
@@ -765,7 +844,7 @@ async def cb_toggle_payment_form(callback: CallbackQuery):
     Обробник для перемикання статусу форми оплати.
     """
     telegram_id = callback.from_user.id
-    form_id_to_toggle = int(callback.data.replace("toggle_payment_form_", "")) # Отримуємо ID форми оплати як int
+    form_id_to_toggle = int(callback.data.replace("toggle_payment_form_", ""))  # Отримуємо ID форми оплати як int
 
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
     current_payment_forms = lardi_filter_obj.payment_form_ids if lardi_filter_obj.payment_form_ids is not None else []
@@ -861,13 +940,13 @@ async def cb_toggle_boolean_option(callback: CallbackQuery):
     # або значення в БД вже було таким, як ми намагалися встановити.
     if getattr(lardi_filter_obj_reloaded, param_name) == current_value_before_set:
         display_name = boolean_options_names.get(param_name, param_name)
-        status_text = "увімкнено" if current_value_before_set else "вимкнено" # Використовуємо значення до зміни, бо фактичної зміни не відбулось
+        status_text = "увімкнено" if current_value_before_set else "вимкнено"  # Використовуємо значення до зміни, бо фактичної зміни не відбулось
         await callback.answer(f"Опція '{display_name}' вже {status_text} (без змін).", show_alert=False)
-        return # Виходимо, оскільки немає чого змінювати
+        return  # Виходимо, оскільки немає чого змінювати
 
     # Якщо ми дійшли сюди, то зміна відбулася і була успішно перезавантажена
     display_name = boolean_options_names.get(param_name, param_name)
-    status_text = "увімкнено" if new_value else "вимкнено" # Використовуємо intended new_value для повідомлення
+    status_text = "увімкнено" if new_value else "вимкнено"  # Використовуємо intended new_value для повідомлення
     message_text = f"✅ Опція '{display_name}' {status_text}."
 
     # Генеруємо клавіатуру з ПЕРЕЗАВАНТАЖЕНОГО об'єкта
@@ -881,11 +960,10 @@ async def cb_toggle_boolean_option(callback: CallbackQuery):
         if "message is not modified" in str(e):
             logger.warning(f"Message reply markup not modified for user {telegram_id}: {e}")
         else:
-            raise # Перевикидаємо інші помилки TelegramBadRequest
+            raise  # Перевикидаємо інші помилки TelegramBadRequest
     finally:
         # Завжди відповідаємо на callback
         await callback.answer(message_text, show_alert=False)
-
 
 
 @router.callback_query(FilterForm.main_menu, F.data == "show_current_filters")
