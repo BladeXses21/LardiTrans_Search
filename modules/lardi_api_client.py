@@ -21,9 +21,10 @@ class LardiOfferClient:
     """
     Клієнт для отримання інформації про конкретний вантаж з Lardi-Trans.
     """
+
     def __init__(self):
         self.base_url = "https://lardi-trans.com/webapi/proposal/offer/gruz/"
-        self._update_headers_with_cookies() # Оновлюємо заголовки при ініціалізації
+        self._update_headers_with_cookies()  # Оновлюємо заголовки при ініціалізації
 
     def _update_headers_with_cookies(self):
         """Оновлює заголовки HTTP з поточними cookie від CookieManager."""
@@ -66,18 +67,19 @@ class LardiOfferClient:
             except Exception as e:
                 logger.error(f"Unknown error fetching offer {offer_id}: {e}")
                 return None
-        return None # Якщо всі спроби вичерпано
+        return None  # Якщо всі спроби вичерпано
 
 
 class LardiClient:
     """
     Клієнт для пошуку вантажів та управління фільтрами на Lardi-Trans.
     """
+
     def __init__(self):
         self.url = "https://lardi-trans.com/webapi/proposal/search/gruz/"
-        self._update_headers_with_cookies() # Оновлюємо заголовки при ініціалізації
+        self._update_headers_with_cookies()  # Оновлюємо заголовки при ініціалізації
         self.page = 1
-        self.page_size = 20 # 20, так як це стандарт для Lardi
+        self.page_size = 20  # 20, так як це стандарт для Lardi
         self.sort_by_country = False
         self.filters = self.default_filters()
 
@@ -97,8 +99,8 @@ class LardiClient:
         return {
             "directionFrom": {"directionRows": [{"countrySign": "UA"}]},
             "directionTo": {"directionRows": [{"countrySign": "UA"}]},
-            "mass1": None, # Додано, щоб можна було встановлювати через інтерфейс
-            "mass2": None, # Додано, щоб можна було встановлювати через інтерфейс
+            "mass1": None,  # Додано, щоб можна було встановлювати через інтерфейс
+            "mass2": None,  # Додано, щоб можна було встановлювати через інтерфейс
             "volume1": None,
             "volume2": None,
             "dateFromISO": None,
@@ -124,7 +126,7 @@ class LardiClient:
             "cargoPackagingIds": [],
             "excludeCargos": [],
             "cargoBodyTypeProperties": [],
-            "paymentCurrencyId": 4, # UAH (наприклад)
+            "paymentCurrencyId": 4,  # UAH (наприклад)
             "paymentValue": None,
             "paymentValueType": "TOTAL",
             "companyRefId": None,
@@ -233,7 +235,6 @@ class LardiClient:
             logger.error(f"Невідома помилка при завантаженні даних: {e}")
             raise Exception(f"Unknown Error: {e}")
 
-
     @sync_to_async
     def _get_filter_object_for_user(self, user_id: int):
         """
@@ -243,7 +244,7 @@ class LardiClient:
         from filters.models import LardiSearchFilter
 
         try:
-            user_profile = UserProfile.objects.get(user__telegram_id=user_id)
+            user_profile = UserProfile.objects.get(telegram_id=user_id)
             return LardiSearchFilter.objects.get(user=user_profile)
         except (UserProfile.DoesNotExist, LardiSearchFilter.DoesNotExist):
             logger.warning(f"LardiSearchFilter not found for user {user_id}. Using default filters.")
@@ -291,28 +292,79 @@ class LardiClient:
         # Для простоти, я просто оновлюю заголовки.
         self.headers["cookie"] = new_cookie
 
+    async def get_all_offers(self, user_telegram_id: int) -> list:
+        """
+        Асинхронно отримує всі вантажі з Lardi-Trans API, використовуючи фільтри
+        з бази даних для конкретного користувача, або дефолтні.
+        """
+        self._update_headers_with_cookies()
+
+        lardi_filter_obj = await self._get_filter_object_for_user(user_telegram_id)
+        if lardi_filter_obj:
+            filters = user_filter_to_dict(lardi_filter_obj)
+            logger.info(f"Використання фільтрів з БД для користувача {user_telegram_id}.")
+        else:
+            filters = self.default_filters()
+            logger.info(f"Фільтри не знайдено для користувача {user_telegram_id}. Використано фільтри за замовчуванням.")
+
+        all_proposals = []
+        page = 1
+        page_size = 20
+        total_pages = 0
+
+        for i in range(0, 100):
+            payload = {
+                "page": page,
+                "size": page_size,
+                "sortByCountryFirst": self.sort_by_country,
+                "filter": filters,
+            }
+            self._update_headers_with_cookies()
+
+            try:
+                response = requests.post(self.url, headers=self.headers, json=payload)
+                # logger.info(f"LardiAPI - INFO - RESPONSE {response.json()}")
+                response.raise_for_status()
+                data = response.json()
+                proposals = data.get("result", {}).get("proposals", [])
+                logger.info(f"LardiAPI - INFO - Сторінка {page}: отримано {len(proposals)} вантажів")
+                if not proposals:
+                    break
+                all_proposals.extend(proposals)
+                total_pages += 1
+                if len(proposals) < page_size:
+                    # this is last page
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(f"Помилка при отриманні сторінки {page} вантажів: {e}")
+                break
+        logger.info(f"LardiAPI - INFO - Завершено. Всього сторінок: {total_pages}. Всього вантажів: {len(all_proposals)}")
+        return all_proposals
+
 
 class LardiNotificationClient(LardiClient):
     """
     Клієнт для Lardi-Trans API, спеціалізований на пошуку нових вантажів для сповіщень.
     """
+
     async def get_new_offers(self, user_telegram_id: int, last_notification_time: datetime) -> List[Dict[str, Any]]:
         """
         Отримує список нових вантажів, створених після last_notification_time,
         з використанням фільтрів користувача.
         """
-        all_offers = await self.get_offers(user_telegram_id)
+        all_offers = await self.get_all_offers(user_telegram_id)
         if not all_offers:
             return []
 
         new_offers = []
         for offer in all_offers:
-            created_at_str  = offer.get('dateCreate')
-            if created_at_str :
+            created_at_str = offer.get('dateCreate')
+            if created_at_str:
                 try:
                     # Розбираємо дату з урахуванням мілісекунд та часового поясу
                     # Приклад: "2024-06-24T10:30:00.123+03:00" або "2024-06-24T10:30:00"
-                    if '.' in created_at_str  and '+' in created_at_str :
+                    if '.' in created_at_str and '+' in created_at_str:
                         dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S.%f%z')
                     elif '.' in created_at_str:
                         dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S.%f')

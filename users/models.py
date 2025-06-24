@@ -5,7 +5,7 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     telegram_id = models.BigIntegerField(unique=True)
     notification_status = models.BooleanField(default=False)
-    notification_time = models.DateTimeField(default=None, null=True)
+    notification_time = models.DateTimeField(auto_now_add=True, null=True)
     cargo_skip = models.JSONField(blank=True, null=True)
     extra_data = models.JSONField(blank=True, null=True) # Для додаткових налаштувань
 

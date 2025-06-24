@@ -16,7 +16,7 @@ from modules.utils import add_line, date_format
 
 logger = logging.getLogger(__name__)
 
-NOTIFICATION_CHECK_INTERVAL = 35  # 5 хвилин у секундах
+NOTIFICATION_CHECK_INTERVAL = 50  # 5 хвилин у секундах
 
 
 async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Dict[str, Any]):
@@ -105,10 +105,10 @@ def get_active_notification_users() -> List[UserProfile]:
     """
     Повертає список UserProfile, у яких увімкнено сповіщення.
     """
-    # Додаємо фільтрацію по notification_status=True і notification_time не None
-    users = list(UserProfile.objects.filter(notification_status=True))
-    logger.info(f"Знайдено {len(users)} активних користувачів для сповіщень.")
-    return users
+    return list(UserProfile.objects.select_related("user").filter(
+        notification_status=True,
+        notification_time__isnull=False
+    ))
 
 
 async def notification_checker(bot: Bot):
@@ -117,31 +117,36 @@ async def notification_checker(bot: Bot):
     для всіх користувачів з увімкненими сповіщеннями.
     """
     while True:
-        logger.info("Запуск перевірки сповіщень...")
-        users_to_notify = await get_active_notification_users()
-        for user_profile in users_to_notify:
-            logger.info(f"{user_profile} - триває перевірка сповіщень користувача")
-            last_notification_time = user_profile.notification_time
-            logger.info(f"notification_time для {user_profile.user.username}: {last_notification_time} (Тип: {type(last_notification_time)})") # <--- ДОДАЙТЕ ЦЕЙ РЯДОК
-            if not last_notification_time:
-                logger.warning(f"Користувач {user_profile.user.username} має увімкнені сповіщення, але відсутній notification_time. Пропускаємо.")
-                continue
+        try:
+            logger.info("Запуск перевірки сповіщень...")
+            users_to_notify = await get_active_notification_users()
+            logger.info(f"Користувачі для сповіщень (id): {[u.id for u in users_to_notify]}")
 
-            try:
-                # Отримуємо нові вантажі для користувача, використовуючи його фільтри
-                new_cargos = await lardi_notification_client.get_new_offers(
-                    user_profile.telegram_id,
-                    last_notification_time
-                )
+            for user_profile in users_to_notify:
+                logger.info(f"user_id={user_profile.id}, telegram_id={user_profile.telegram_id}")  # Не чіпаємо user.username тут
+                last_notification_time = user_profile.notification_time
+                if not last_notification_time:
+                    logger.warning(f"Користувач {user_profile.user.username} має увімкнені сповіщення, але відсутній notification_time. Пропускаємо.")
+                    continue
 
-                if new_cargos:
-                    logger.info(f"Знайдено {len(new_cargos)} нових вантажів для {user_profile.user.username}.")
-                    for cargo in new_cargos:
-                        await send_cargo_notification(bot, user_profile, cargo)
-                else:
-                    logger.info(f"Не знайдено нових вантажів для {user_profile.user.username}.")
+                try:
+                    # Отримуємо нові вантажі для користувача, використовуючи його фільтри
+                    new_cargos = await lardi_notification_client.get_new_offers(
+                        user_profile.telegram_id,
+                        last_notification_time
+                    )
 
-            except Exception as e:
-                logger.error(f"Помилка при перевірці сповіщень для користувача {user_profile.user.username}: {e}")
+                    if new_cargos:
+                        logger.info(f"Знайдено {len(new_cargos)} нових вантажів для {user_profile.user.username}.")
+                        for cargo in new_cargos:
+                            await send_cargo_notification(bot, user_profile, cargo)
+                    else:
+                        logger.info(f"Не знайдено нових вантажів для {user_profile.user.username}.")
+
+                except Exception as e:
+                    logger.error(f"Помилка при перевірці сповіщень для користувача {user_profile.user.username}: {e}")
+
+        except Exception as e:
+            logger.error(f"FATAL ERROR in notification_checker: {e}", exc_info=True)
 
         await asyncio.sleep(NOTIFICATION_CHECK_INTERVAL) # Чекаємо 5 хвилин
