@@ -215,9 +215,9 @@ async def cb_search_offers(callback: CallbackQuery):
     try:
         telegram_id = callback.from_user.id
 
-        user_profile, created = await UserProfile.objects.aget_or_create(telegram_id=telegram_id)
+        user_profile = await UserProfile.objects.aget(telegram_id=telegram_id)
 
-        lardi_filter_obj, created_filter = await LardiSearchFilter.objects.aget_or_create(user=user_profile)
+        lardi_filter_obj = await LardiSearchFilter.objects.aget(user=user_profile)
 
         user_filters = user_filter_to_dict(lardi_filter_obj) if user_filter_to_dict(lardi_filter_obj) else lardi_client.filters
 
@@ -268,7 +268,7 @@ async def cb_search_offers(callback: CallbackQuery):
             # Вантаж
             block += add_line("📦 Вантаж: ", cargo)
             block += add_line("⚖️ Вага: ", mass)
-            block += add_line("📦 Обʼєм: ", volume)
+            block += add_line("📐 Обʼєм: ", volume)
             # Оплата
             block += add_line("💰 Оплата: ", f"{payment} ({payment_form})", important=True)
             # Відстань і повтор
@@ -359,21 +359,6 @@ async def cb_update_lardi_cookie(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-
-@router.message(LardiForm.waiting_for_new_cookie)
-async def process_new_cookie(message: Message, state: FSMContext):
-    """
-    Обробник отримання нового cookie від користувача.
-    """
-    new_cookie = message.text.strip()
-    try:
-        # Використання вашого класу LardiClient для оновлення cookie
-        lardi_client.update_cookie(new_cookie)
-        await message.answer(settings_manager.get("text_cookie_updated"), reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        await message.answer(f"❌ Сталася помилка при оновленні cookie: {e}", reply_markup=get_back_to_main_menu_button())
-    finally:
-        await state.clear()
 
 
 @router.callback_query(F.data == "cancel_action")

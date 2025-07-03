@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 import re
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from asgiref.sync import sync_to_async
 
 from users.models import UserProfile
@@ -59,34 +60,49 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
 
     await update_cargo_skip(user_profile, cargo_id)
 
-    # Формування повідомлення з екранацією ВСІХ динамічних даних!
+    message_parts = {
+        "cargo_id": str(cargo_id),
+        "dateFrom": str(date_format(cargo.get("dateFrom", "-"))),
+        "dateTo": str(date_format(cargo.get("dateTo", "-"))),
+        "dateCreate": str(date_format(cargo.get("dateCreate", "-"))),
+        "dateEdit": str(date_format(cargo.get("dateEdit", "-"))),
+
+        "from_town": str(cargo.get("waypointListTarget", [{}])[0].get("town", "-")),
+        "from_region": str(cargo.get("waypointListTarget", [{}])[0].get("region", "-")),
+        "from_countrySign": str(cargo.get("waypointListTarget", [{}])[0].get("countrySign", "-")),
+        "from_address": str(cargo.get("waypointListTarget", [{}])[0].get("address", "-")),
+
+        "to_town": str(cargo.get("waypointListTarget", [{}])[0].get("town", "-")),
+        "to_region": str(cargo.get("waypointListTarget", [{}])[0].get("region", "-")),
+        "to_countrySign": str(cargo.get("waypointListTarget", [{}])[0].get("countrySign", "-")),
+        "to_address": str(cargo.get("waypointListTarget", [{}])[0].get("address", "-")),
+
+        "loadTypes": str(cargo.get("loadTypes", "-")),
+        "gruzName": str(cargo.get("gruzName", "-")),
+        "gruzMass": str(cargo.get("gruzMass", "-")),
+        "gruzVolume": str(cargo.get("gruzVolume", "-")),
+        "payment": str(cargo.get("payment", "-")),
+        "paymentForms": ", ".join(pf.get("name", "") for pf in cargo.get("paymentForms", [])),
+        "distance": round(cargo.get("distance", 0) / 1000) if cargo.get("distance") else '—',
+        "repeated": "🔁 Повторюваний" if cargo.get("repeated") else "",
+    }
+
+    escaped_message_parts = {k: escape_markdown_v2(v) for k, v in message_parts.items()}
+
     template = settings_manager.get("text_notification_new_cargo")
-    # Формування повідомлення
-    message_text = template.format(
-        cargo_id=escape_markdown_v2(cargo_id)
-    )
 
-    created_at_str = cargo.get("createDate")
-    if created_at_str:
-        try:
-            # Парсимо дату з урахуванням різних форматів і часових поясів
-            if '.' in created_at_str and '+' in created_at_str:
-                dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S.%f%z')
-            elif '.' in created_at_str:
-                 dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S.%f')
-                 dt_object = dt_object.replace(tzinfo=timezone.utc) # Припускаємо UTC, якщо немає зони
-            elif '+' in created_at_str:
-                dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S%z')
-            else:
-                dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S')
-                dt_object = dt_object.replace(tzinfo=timezone.utc) # Припускаємо UTC, якщо немає зони
+    try:
+        message_text = template.format(
+            **escaped_message_parts
+        )
+    except KeyError as e:
+        logger.error(f"Помилка форматування шаблону 'text_notification_new_cargo'. Відсутня змінна {e} у даних вантажу або escape_markdown_v2: {cargo}. Шаблон: {template}")
+        return await bot.send_message(
+            chat_id=user_profile.telegram_id,
+            text="Не вдалось сформувати повідомлення про новий вантаж.",
+            parse_mode=ParseMode.HTML,
+        )
 
-            message_text += add_line(
-                escape_markdown_v2(settings_manager.get("text_created")),
-                escape_markdown_v2(date_format(created_at_str)),
-            )
-        except ValueError as e:
-            logger.warning(f"Не вдалося розпарсити дату створення вантажу '{created_at_str}': {e}")
 
     try:
         await bot.send_message(
@@ -101,6 +117,7 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
             f"Не вдалося надіслати сповіщення користувачу {user_profile.user.username} (ID: {user_profile.telegram_id}): {e}\n"
             f"Текст повідомлення: {message_text}"
         )
+
 
 @sync_to_async
 def get_active_notification_users() -> List[UserProfile]:
@@ -152,4 +169,4 @@ async def notification_checker(bot: Bot):
         except Exception as e:
             logger.error(f"FATAL ERROR in notification_checker: {e}", exc_info=True)
 
-        await asyncio.sleep(NOTIFICATION_CHECK_INTERVAL) # Чекаємо 5 хвилин
+        await asyncio.sleep(NOTIFICATION_CHECK_INTERVAL)  # Чекаємо 5 хвилин

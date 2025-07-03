@@ -30,44 +30,44 @@ class LardiOfferClient:
         """Оновлює заголовки HTTP з поточними cookie від CookieManager."""
         self.headers = {
             "accept": "application/json, text/plain, */*",
+            "content-type": "application/json",
             "user-agent": "Mozilla/5.0",
-            "cookie": _cookie_manager.get_cookie_string(),  # Беремо cookie з менеджера
             "referer": "https://lardi-trans.com/log/search/gruz/",
-            "origin": "https://lardi-trans.com"
+            "origin": "https://lardi-trans.com",
+            "cookie": _cookie_manager.get_cookie_string()  # Беремо cookie з менеджера
         }
 
-    def get_offer(self, offer_id: int, retry_count: int = 1) -> Optional[dict]:
+    def get_offer(self, offer_id: int, retry_count: int = 2) -> Optional[dict]:
         """Отримати інформацію про вантаж за ID."""
-        url = f"{self.base_url}{offer_id}"
-        self._update_headers_with_cookies()  # Оновлюємо куки перед кожним запитом
+        url = f"{self.base_url}{offer_id}/awaiting/?currentId={offer_id}"
 
-        for attempt in range(retry_count + 1):
+        for attempt in range(retry_count):
             try:
+                self._update_headers_with_cookies()
                 response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()  # Піднімає HTTPError для поганих відповідей (4xx або 5xx)
+                response.raise_for_status()  # Викликає HTTPError для поганих відповідей (4xx або 5xx)
                 return response.json()
+
             except requests.exceptions.HTTPError as e:
+                logger.error(f"HTTP error {e.response.status_code} fetching offer {offer_id}: {e}")
                 if response.status_code == 403:
-                    logger.warning(f"403 Forbidden for offer {offer_id}. Cookie might be expired. Attempting to refresh...")
+                    logger.info("Отримано 401 помилку. Спроба оновити cookie та повторити запит...")
                     if _cookie_manager.refresh_lardi_cookies():
-                        self._update_headers_with_cookies()
-                        continue  # Повторюємо запит з новими куками
+                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
+                        continue
                     else:
-                        logger.error(f"Failed to refresh cookie for offer {offer_id}.")
-                        return None
-                elif response.status_code == 404:
-                    logger.info(f"Offer {offer_id} not found (404).")
-                    return None
+                        logger.error("Не вдалося оновити cookie. Відмова від повторної спроби.")
+                        raise Exception("Failed to refresh cookies and fetch data.")
                 else:
-                    logger.error(f"HTTP error {response.status_code} fetching offer {offer_id}: {e}")
-                    return None
+                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+                    raise Exception(f"Error {response.status_code}: {response.text}")
             except requests.exceptions.RequestException as e:
                 logger.error(f"Network error fetching offer {offer_id}: {e}")
-                return None
+                raise Exception(f"Network Error: {e}")
             except Exception as e:
                 logger.error(f"Unknown error fetching offer {offer_id}: {e}")
-                return None
-        return None  # Якщо всі спроби вичерпано
+                raise Exception(f"Unknown Error: {e}")
+        return None
 
 
 class LardiClient:
@@ -99,8 +99,8 @@ class LardiClient:
         return {
             "directionFrom": {"directionRows": [{"countrySign": "UA"}]},
             "directionTo": {"directionRows": [{"countrySign": "UA"}]},
-            "mass1": None,  # Додано, щоб можна було встановлювати через інтерфейс
-            "mass2": None,  # Додано, щоб можна було встановлювати через інтерфейс
+            "mass1": None,
+            "mass2": None,
             "volume1": None,
             "volume2": None,
             "dateFromISO": None,
@@ -204,7 +204,6 @@ class LardiClient:
         self._update_headers_with_cookies()
 
         try:
-            print(payload)
             response = requests.post(self.url, headers=self.headers, json=payload)
             response.raise_for_status()
             return response.json()
@@ -280,17 +279,6 @@ class LardiClient:
             logger.error(f"Невідома помилка при завантаженні даних: {e}")
             raise Exception(f"Unknown Error: {e}")
 
-    def update_cookie(self, new_cookie: str):
-        """
-        Цей метод тепер фактично не буде використовуватися для оновлення cookie,
-        оскільки оновлення відбувається автоматично через CookieManager.
-        Однак, я залишаю його для сумісності, якщо ви все ж захочете вручну встановити cookie.
-        """
-        logger.warning("Ручне оновлення cookie через update_cookie() тепер не рекомендується. Використовуйте автоматичне оновлення.")
-        # Тут можна було б оновити _cookie_manager.cookies, але це менш безпечно,
-        # ніж повний вхід. Якщо все ж потрібна ця функція, її варто переробити.
-        # Для простоти, я просто оновлюю заголовки.
-        self.headers["cookie"] = new_cookie
 
     async def get_all_offers(self, user_telegram_id: int) -> list:
         """
@@ -328,7 +316,6 @@ class LardiClient:
                 data = response.json()
                 proposals = data.get("result", {}).get("proposals", [])
                 logger.info(f"LardiAPI - INFO - Сторінка {page}: отримано {len(proposals)} вантажів")
-                logger.info(f"LardiAPI - INFO - Тип proposals: {type(proposals)} на сторінці {page}")
                 if not isinstance(proposals, list):
                     logger.warning(f"LardiAPI - WARNING - proposals не є списком: {proposals}")
                     proposals = []
@@ -363,7 +350,6 @@ class LardiNotificationClient(LardiClient):
             if not isinstance(offer, dict):
                 logger.warning(f"OFFER - WARNING - Пропущено некоректний запис (не dict): {offer}")
                 continue
-            logger.info(f"OFFER - INFO - {offer}")
             created_at_str = offer.get('dateCreate')
             if created_at_str:
                 try:

@@ -1,6 +1,9 @@
 import os
 # Налаштування Django оточення
 import django
+import requests
+
+from modules.cookie_manager import CookieManager
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lardiweb.settings')
 django.setup()
@@ -14,6 +17,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web  # Імпортуємо web для запуску веб-сервера
+from asgiref.sync import sync_to_async # Імпортуємо sync_to_async
 
 from modules.app_config import env_config
 from modules.handlers import user_handlers, admin_handlers, payment_handlers
@@ -26,6 +30,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def refresh_cookies_periodically(cookie_manager_instance: CookieManager):
+    """
+    Фонове завдання для періодичного оновлення Lardi-Trans cookie.
+    """
+    # Перше оновлення при старті
+    logger.info("Performing initial Lardi-Trans cookie refresh...")
+    success = await sync_to_async(cookie_manager_instance.refresh_lardi_cookies)()
+    if success:
+        logger.info("Initial Lardi-Trans cookies refreshed successfully.")
+    else:
+        logger.warning("Failed to perform initial Lardi-Trans cookie refresh.")
+
+    # Періодичні оновлення
+    while True:
+        await asyncio.sleep(2 * 3600) # Чекати 2 години (2 * 60 хвилин * 60 секунд)
+        logger.info("Attempting to refresh Lardi-Trans cookies periodically...")
+        success = await sync_to_async(cookie_manager_instance.refresh_lardi_cookies)()
+        if success:
+            logger.info("Lardi-Trans cookies refreshed successfully.")
+        else:
+            logger.warning("Failed to refresh Lardi-Trans cookies.")
+
+
 async def main() -> None:
     """
     Основна функція для запуску бота та веб-сервера.
@@ -34,11 +61,16 @@ async def main() -> None:
         logger.critical("TELEGRAM_BOT_TOKEN is not set in .env. Exiting.")
         return
 
-    if not env_config.WEBAPP_BASE_URL or env_config.WEBAPP_BASE_URL == "https://a454-91-245-124-201.ngrok-free.app/webapp/cargo_details.html":
+    if not env_config.WEBAPP_BASE_URL:
         logger.warning("WEBAPP_BASE_URL is not configured in .env. Web App functionality may not work.")
 
-    if not env_config.WEBAPP_API_PROXY_URL == "https://a454-91-245-124-201.ngrok-free.app/api/cargo_details":
+    if not env_config.WEBAPP_API_PROXY_URL:
         logger.warning("WEBAPP_API_PROXY_URL is not configured in .env. Web App proxy functionality may not work.")
+
+    if not env_config.LARDI_USERNAME or not env_config.LARDI_PASSWORD:
+        logger.warning("LARDI_USERNAME or LARDI_PASSWORD is not configured in .env. LARDI functionality may not work.")
+
+    cookie_manager = CookieManager()
 
     # Ініціалізація бота
     bot = Bot(token=env_config.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
@@ -69,6 +101,9 @@ async def main() -> None:
     notification_task = asyncio.create_task(notification_checker(bot))
     logger.info("Запущено фонову задачу перевірки сповіщень.")
 
+    cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
+    logger.info("Запущено фонову задачу оновлення Lardi-Trans cookie.")
+
     # Запускаємо бота
     logger.info("Бот запущено!")
     await dp.start_polling(bot)
@@ -76,9 +111,10 @@ async def main() -> None:
     # Очікуємо завершення фонових задач (це може бути корисно при зупинці програми)
     await web_server_task
     await notification_task
-
+    await cookie_refresh_task
 
 if __name__ == "__main__":
+
 
     try:
         asyncio.run(main())

@@ -9,7 +9,6 @@ class EnvConfig:
     Клас для зберігання конфігурації з змінних середовища.
     """
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    LARDI_COOKIE: str = os.getenv("LARDI_COOKIE", "") # Ця змінна більше не використовується для активних cookie, але залишиться для сумісності
     LARDI_USERNAME: str = os.getenv("LARDI_USERNAME", "") # Нова змінна для логіну Lardi-Trans
     LARDI_PASSWORD: str = os.getenv("LARDI_PASSWORD", "") # Нова змінна для пароля Lardi-Trans
     LARDI_LOGIN_URL: str = os.getenv("LARDI_LOGIN_URL", "")
@@ -77,6 +76,24 @@ class SettingsManager:
         "text_button_notifications_disable": "❌ Вимкнути сповіщення",
         "text_notifications_toggle_success_enabled": "✅ Сповіщення успішно увімкнено!",
         "text_notifications_toggle_success_disabled": "❌ Сповіщення успішно вимкнено!",
+
+        "text_notification_new_cargo": (
+            "🚛 Новий вантаж\\! ID: *{cargo_id}*\n"
+            "🕒 {dateFrom} → {dateTo}\n"
+            "📅 Ств\\.: {dateCreate} \\| Змін\\.: {dateEdit}\n"
+            "📌 Завантаження: *{from_town}* *{from_region}* *{from_countrySign}*\n"
+            "◽ {from_address}\n" 
+            "📍 Вивантаження: *{to_town}* *{to_region}* *{to_countrySign}*\n"
+            "◾ {to_address}\n" 
+            "🚚 Тип завантаження: *{loadTypes}*\n"
+            "📦 Вантаж: {gruzName}\n"
+            "⚖️ Вага: {gruzMass}\n"
+            "📐 Обʼєм: {gruzVolume}\n"
+            "💰 Оплата: *{payment} \\({paymentForms}\\)*\n"
+            "🛣️ Відстань: {distance} км\n"
+            "{repeated}"
+        ),
+
     }
 
     def get(self, key: str):
