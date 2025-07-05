@@ -2,7 +2,7 @@ import json
 import os
 import logging
 import time  # Для пауз
-import undetected_chromedriver as uc  # Для обходу reCAPTCHA
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -55,6 +55,7 @@ class CookieManager:
 
     def get_cookie_string(self) -> str:
         """Повертає cookie у форматі рядка для заголовка 'Cookie'."""
+        self.cookies = self._load_cookies()
         return "; ".join([f"{key}={value}" for key, value in self.cookies.items()])
 
     def _handle_session_limit_modal(self, driver) -> bool:
@@ -64,15 +65,14 @@ class CookieManager:
         """
         delete_button_xpath = "//button[contains(@class, 'passport--limit-modal__sessions__session__delete')]"
         try:
-            # Чекаємо до 5 секунд на появу кнопки
             logger.info("Перевіряю наявність кнопки видалення сесії...")
-            delete_button = WebDriverWait(driver, 5).until(
+            delete_button = WebDriverWait(driver, 30).until(
                 EC.element_to_be_clickable((By.XPATH, delete_button_xpath))
             )
             logger.warning("Знайдено кнопку видалення сесії. Натискаю...")
             delete_button.click()
             # Чекаємо, поки модальне вікно зникне або сторінка оновиться
-            time.sleep(2)
+            time.sleep(0.5)
             logger.info("Кнопку видалення сесії натиснуто.")
             return True
         except TimeoutException:
@@ -93,42 +93,50 @@ class CookieManager:
 
         driver = None
         try:
-            # Ініціалізація undetected_chromedriver в безголовому режимі
             options = uc.ChromeOptions()
             # options.add_argument('--headless')  # Запуск без вікна браузера
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
             options.add_argument('--window-size=1920,1080')
-            options.add_argument('--start-maximized')  # Додаємо, щоб уникнути проблем з прихованими елементами
+            options.add_argument('--start-maximized')
+            options.add_argument("--disable-infobars")
+            options.add_argument("--disable-blink-features=AutomationControlled")
 
+            options.add_argument(r"--user-data-dir=C:\Users\artur\PycharmProjects\LardiTrans_Search\modules\profile")
             logger.info("Запуск Undetected ChromeDriver...")
+
             driver = uc.Chrome(options=options)
-            driver.set_page_load_timeout(30)  # Встановлюємо таймаут завантаження сторінки
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                'source': '''
+                    delete window.cdc_adoQpoasnfa76fcZLmcfl_Array;
+                    delete window.cdc_adoQpoasnfa76fcZLmcfl_Promise;
+                    delete window.cdc_adoQpoasnfa76fcZLmcfl_Symbol;
+                '''
+            })
+            driver.set_page_load_timeout(30)
+            wait = WebDriverWait(driver, 30)
 
-            # Крок 1: Перехід на сторінку входу
-            logger.info(f"Перехід на сторінку входу: {self.login_url}")
+            logger.info(f"Спроба перейти на автентифіковану сторінку для перевірки статусу входу: {self.login_url}")
             driver.get(self.login_url)
+            time.sleep(2)
 
-            # Чекаємо, поки поля логіну та паролю стануть доступними
-            wait = WebDriverWait(driver, 30)  # Збільшено таймаут на 30 секунд
+            # if self.login_url not in driver.current_url:
+            #     logger.info("Браузер, схоже, вже авторизований. Копіюємо cookie.")
+            #     all
 
-            # Пошук елемента логіну за XPath
             login_field_xpath = "//input[@name='login']"
             username_input = wait.until(EC.presence_of_element_located((By.XPATH, login_field_xpath)))
             logger.info(f"Знайдено поле логіну за XPath: {login_field_xpath}")
 
-            # Пошук елемента паролю за XPath
             password_field_xpath = "//input[@type='password']"
             password_input = wait.until(EC.presence_of_element_located((By.XPATH, password_field_xpath)))
             logger.info(f"Знайдено поле паролю за XPath: {password_field_xpath}")
 
-            # Введення логіну та паролю
             username_input.send_keys(self.username)
             password_input.send_keys(self.password)
             logger.info("Введено логін та пароль.")
 
-            # Крок 2: Натискання на чекбокс "Запам'ятати мене"
             remember_me_checkbox_xpath = "//span[@class='passport-checkbox__label']"
             try:
                 remember_me_checkbox = wait.until(EC.element_to_be_clickable((By.XPATH, remember_me_checkbox_xpath)))
@@ -142,25 +150,19 @@ class CookieManager:
             except Exception as e:
                 logger.warning(f"Помилка при натисканні чекбоксу 'Запам'ятати мене': {e}")
 
-            # Пошук кнопки "Увійти" за XPath та натискання її
             login_button_xpath = "//button[@type='submit' and text()='Увійти']"
             login_button = wait.until(EC.element_to_be_clickable((By.XPATH, login_button_xpath)))
             logger.info(f"Знайдено кнопку 'Увійти' за XPath: {login_button_xpath}. Натискання...")
             time.sleep(1)
             login_button.click()
 
-            # Спроба обробити модальне вікно ліміту сесій після спроби входу
-            self._handle_session_limit_modal(driver)
+            session_limit_status = self._handle_session_limit_modal(driver)
 
-            # Крок 2: Чекаємо на перенаправлення або зміну URL після входу
-            # Очікуємо, що URL зміниться або з'явиться елемент, який є тільки після входу
-            # Для Lardi-Trans після успішного входу URL зазвичай змінюється на щось інше, ніж /accounts/login/
-            # Можна перевірити, чи зникла форма входу, або чи з'явився елемент з особистого кабінету.
-            # Якщо URL залишився тим самим, але ви бачите повідомлення про помилку, це означає невдалий вхід.
+            time.sleep(2)
 
-            # Наприклад, чекаємо, що поточний URL не міститиме '/accounts/login/'
-            time.sleep(0.5)
-            # Додаткова перевірка: чи не залишилися ми на сторінці входу з повідомленням про помилку
+            if session_limit_status is True:
+                input("Потрібно знайти xpath закриття popup вікна із сесіями")
+
             if "accounts/login" in driver.current_url:
                 if "Неправильный логин или пароль" in driver.page_source or "Incorrect login or password" in driver.page_source:
                     logger.error("Вхід не вдався: невірний логін або пароль.")
@@ -168,7 +170,6 @@ class CookieManager:
                 logger.error("Вхід не вдався: залишилися на сторінці входу без явного повідомлення про помилку.")
                 return False
 
-            # Крок 3: Отримання всіх cookie з браузера
             all_browser_cookies = driver.get_cookies()
             new_cookies = {}
             for cookie in all_browser_cookies:
@@ -195,5 +196,5 @@ class CookieManager:
         finally:
             if driver:
                 logger.info("Закриття браузера Selenium.")
-                driver.quit()  # Завжди закриваємо драйвер
+                driver.quit()
 

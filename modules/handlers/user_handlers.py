@@ -221,7 +221,7 @@ async def cb_search_offers(callback: CallbackQuery):
 
         user_filters = user_filter_to_dict(lardi_filter_obj) if user_filter_to_dict(lardi_filter_obj) else lardi_client.filters
 
-        data = lardi_client.get_proposals(filters=user_filters)
+        data = await lardi_client.get_proposals(filters=user_filters)
         results = data.get("result", {}).get("proposals", {})
 
         if not results:

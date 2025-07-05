@@ -1,34 +1,32 @@
 import os
-# Налаштування Django оточення
 import django
-import requests
-
 from modules.cookie_manager import CookieManager
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lardiweb.settings')
 django.setup()
 
-from modules.notifications_module import notification_checker # Імпортуємо notification_checker
-
+from modules.notifications_module import notification_checker
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiohttp import web  # Імпортуємо web для запуску веб-сервера
-from asgiref.sync import sync_to_async # Імпортуємо sync_to_async
+from aiohttp import web
+from asgiref.sync import sync_to_async
 
 from modules.app_config import env_config
 from modules.handlers import user_handlers, admin_handlers, payment_handlers
-from modules.web_server import webapp_handler, cargo_details_proxy_api  # Імпортуємо функції з web_server
+from modules.web_server import webapp_handler, cargo_details_proxy_api
+
+from django.utils import timezone
+from users.models import UserProfile
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
 
 async def refresh_cookies_periodically(cookie_manager_instance: CookieManager):
     """
@@ -88,10 +86,20 @@ async def main() -> None:
     # Проксі API для отримання даних про вантаж (без ID у шляху, ID буде в параметрі запиту)
     web_app.router.add_get('/api/cargo_details', cargo_details_proxy_api)
 
-
     web_runner = web.AppRunner(web_app)
     await web_runner.setup()
     web_site = web.TCPSite(web_runner, '0.0.0.0', 8080)
+
+    logger.info("Оновлення notification_time для активних користувачів...")
+    current_time = timezone.now()
+
+    @sync_to_async
+    def update_all_notification_times(time_to_set):
+        # Оновлюємо notification_time лише для користувачів з увімкненими сповіщеннями
+        UserProfile.objects.filter(notification_status=True).update(notification_time=time_to_set)
+        logger.info(f"Оновлено notification_time до {time_to_set} для всіх користувачів з увімкненими сповіщеннями.")
+
+    await update_all_notification_times(current_time)
 
     # Запускаємо веб-сервер у фоновому режимі
     web_server_task = asyncio.create_task(web_site.start())

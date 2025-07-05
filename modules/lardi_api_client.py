@@ -1,9 +1,12 @@
+from functools import wraps
+
 import requests
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from asgiref.sync import sync_to_async
 from dotenv import load_dotenv
+
 from modules.cookie_manager import CookieManager
 from typing import Optional, Dict, Any, List
 
@@ -15,6 +18,52 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _cookie_manager = CookieManager()
+
+
+def lardi_api_retry_on_401(func):
+    """
+    Декоратор для автоматичної обробки 401 помилок та повторної спроби запиту
+    після оновлення cookie.
+    """
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        max_retries = 1 # Одна спроба після 401
+        for attempt in range(max_retries + 1):
+            try:
+                # Оновлюємо заголовки перед кожною спробою
+                self._update_headers_with_cookies()
+                # Перетворюємо синхронний виклик на асинхронний, якщо функція сама по собі синхронна
+                if not hasattr(func, '__wrapped__') and not hasattr(func, '__name__') and func.__module__ == 'builtins': # heuristic for detecting if it's a plain function not wrapped by sync_to_async
+                    return await sync_to_async(func)(self, *args, **kwargs)
+                else:
+                    return await func(self, *args, **kwargs)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 401 and attempt < max_retries:
+                    logger.warning("Отримано 401 Unauthorized. Спроба оновити cookie та повторити запит...")
+                    # refresh_lardi_cookies є синхронним, тому обгортаємо його
+                    refresh_success = await sync_to_async(_cookie_manager.refresh_lardi_cookies)()
+                    if refresh_success:
+                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
+                        # Важливо: _update_headers_with_cookies() буде викликано на початку наступної ітерації
+                        continue  # Повторюємо цикл
+                    else:
+                        logger.error("Не вдалося оновити cookie. Відмова від повторної спроби.")
+                        raise  # Прокидаємо оригінальну помилку 401, якщо оновлення не вдалося
+                else:
+                    logger.error(f"HTTP помилка {e.response.status_code} після {attempt+1} спроб: {e}")
+                    raise  # Прокидаємо інші HTTP помилки або 401 після вичерпання спроб
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Мережева помилка після {attempt+1} спроб: {e}")
+                raise # Прокидаємо мережеві помилки
+            except Exception as e:
+                logger.error(f"Невідома помилка після {attempt+1} спроб: {e}")
+                raise # Прокидаємо інші невідомі помилки
+        # Цей рядок ніколи не повинен бути досягнутий, якщо помилка прокинута,
+        # але на випадок, якщо щось піде не так і цикл завершиться без повернення.
+        logger.error("Неочікуване завершення декоратора без повернення або прокидання помилки.")
+        raise Exception("Невідома помилка в API запиті після всіх спроб.")
+    return wrapper
+
 
 
 class LardiOfferClient:
@@ -37,37 +86,41 @@ class LardiOfferClient:
             "cookie": _cookie_manager.get_cookie_string()  # Беремо cookie з менеджера
         }
 
-    def get_offer(self, offer_id: int, retry_count: int = 2) -> Optional[dict]:
+    @lardi_api_retry_on_401
+    async def get_offer(self, offer_id: int) -> Optional[dict]:
         """Отримати інформацію про вантаж за ID."""
         url = f"{self.base_url}{offer_id}/awaiting/?currentId={offer_id}"
+        response = await sync_to_async(requests.get)(url, headers=self.headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
 
-        for attempt in range(retry_count):
-            try:
-                self._update_headers_with_cookies()
-                response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()  # Викликає HTTPError для поганих відповідей (4xx або 5xx)
-                return response.json()
-
-            except requests.exceptions.HTTPError as e:
-                logger.error(f"HTTP error {e.response.status_code} fetching offer {offer_id}: {e}")
-                if response.status_code == 403:
-                    logger.info("Отримано 401 помилку. Спроба оновити cookie та повторити запит...")
-                    if _cookie_manager.refresh_lardi_cookies():
-                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
-                        continue
-                    else:
-                        logger.error("Не вдалося оновити cookie. Відмова від повторної спроби.")
-                        raise Exception("Failed to refresh cookies and fetch data.")
-                else:
-                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
-                    raise Exception(f"Error {response.status_code}: {response.text}")
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Network error fetching offer {offer_id}: {e}")
-                raise Exception(f"Network Error: {e}")
-            except Exception as e:
-                logger.error(f"Unknown error fetching offer {offer_id}: {e}")
-                raise Exception(f"Unknown Error: {e}")
-        return None
+        # for attempt in range(retry_count):
+        #     try:
+        #         self._update_headers_with_cookies()
+        #         response = requests.get(url, headers=self.headers, timeout=10)
+        #         response.raise_for_status()  # Викликає HTTPError для поганих відповідей (4xx або 5xx)
+        #         return response.json()
+        #
+        #     except requests.exceptions.HTTPError as e:
+        #         logger.error(f"HTTP error {e.response.status_code} fetching offer {offer_id}: {e}")
+        #         if response.status_code == 403:
+        #             logger.info("Отримано 401 помилку. Спроба оновити cookie та повторити запит...")
+        #             if _cookie_manager.refresh_lardi_cookies():
+        #                 logger.info("Cookie успішно оновлено. Повторюємо запит.")
+        #                 continue
+        #             else:
+        #                 logger.error("Не вдалося оновити cookie. Відмова від повторної спроби.")
+        #                 raise Exception("Failed to refresh cookies and fetch data.")
+        #         else:
+        #             logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+        #             raise Exception(f"Error {response.status_code}: {response.text}")
+        #     except requests.exceptions.RequestException as e:
+        #         logger.error(f"Network error fetching offer {offer_id}: {e}")
+        #         raise Exception(f"Network Error: {e}")
+        #     except Exception as e:
+        #         logger.error(f"Unknown error fetching offer {offer_id}: {e}")
+        #         raise Exception(f"Unknown Error: {e}")
+        # return None
 
 
 class LardiClient:
@@ -79,7 +132,7 @@ class LardiClient:
         self.url = "https://lardi-trans.com/webapi/proposal/search/gruz/"
         self._update_headers_with_cookies()  # Оновлюємо заголовки при ініціалізації
         self.page = 1
-        self.page_size = 20  # 20, так як це стандарт для Lardi
+        self.page_size = 20  # 20 це стандарт для Lardi
         self.sort_by_country = False
         self.filters = self.default_filters()
 
@@ -126,7 +179,7 @@ class LardiClient:
             "cargoPackagingIds": [],
             "excludeCargos": [],
             "cargoBodyTypeProperties": [],
-            "paymentCurrencyId": 4,  # UAH (наприклад)
+            "paymentCurrencyId": 4,  # UAH
             "paymentValue": None,
             "paymentValueType": "TOTAL",
             "companyRefId": None,
@@ -144,11 +197,10 @@ class LardiClient:
 
     def set_filter(self, key: str, value):
         """Оновити або додати фільтр."""
-        # Для вкладених словників, ми будемо оновлювати їх безпосередньо в обробниках.
-        # Для простих ключів - просто встановлюємо значення.
         self.filters[key] = value
 
-    def load_data(self, retry_count: int = 2) -> Optional[dict]:
+    @lardi_api_retry_on_401
+    async def load_data(self) -> Optional[dict]:
         """
         Завантажує дані за поточними фільтрами.
         Реалізовано механізм повторної спроби у разі 401 помилки.
@@ -159,41 +211,45 @@ class LardiClient:
             "sortByCountryFirst": self.sort_by_country,
             "filter": self.filters,
         }
-        self._update_headers_with_cookies()  # Переконаємося, що cookie актуальні перед запитом
 
-        try:
-            response = requests.post(self.url, headers=self.headers, json=payload)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 401:
-                logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
-                if retry_count > 0:
-                    if _cookie_manager.refresh_lardi_cookies():
-                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
-                        self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
-                        return self.load_data(retry_count - 1)  # Повторюємо запит
-                    else:
-                        logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
-                        raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
-                else:
-                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
-                    raise Exception(f"Error {response.status_code}: {response.text}")
-            else:
-                logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
-                raise Exception(f"Error {response.status_code}: {response.text}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Помилка мережі при завантаженні даних: {e}")
-            raise Exception(f"Network Error: {e}")
-        except Exception as e:
-            logger.error(f"Невідома помилка при завантаженні даних: {e}")
-            raise Exception(f"Unknown Error: {e}")
+        response = await sync_to_async(requests.post)(self.url, headers=self.headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+        # self._update_headers_with_cookies()  # Переконаємося, що cookie актуальні перед запитом
+        #
+        # try:
+        #     response = requests.post(self.url, headers=self.headers, json=payload)
+        #     response.raise_for_status()
+        #     return response.json()
+        # except requests.exceptions.HTTPError as e:
+        #     if response.status_code == 401:
+        #         logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
+        #         if retry_count > 0:
+        #             if _cookie_manager.refresh_lardi_cookies():
+        #                 logger.info("Cookie успішно оновлено. Повторюємо запит.")
+        #                 self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
+        #                 return self.load_data(retry_count - 1)  # Повторюємо запит
+        #             else:
+        #                 logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
+        #                 raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
+        #         else:
+        #             logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+        #             raise Exception(f"Error {response.status_code}: {response.text}")
+        #     else:
+        #         logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
+        #         raise Exception(f"Error {response.status_code}: {response.text}")
+        # except requests.exceptions.RequestException as e:
+        #     logger.error(f"Помилка мережі при завантаженні даних: {e}")
+        #     raise Exception(f"Network Error: {e}")
+        # except Exception as e:
+        #     logger.error(f"Невідома помилка при завантаженні даних: {e}")
+        #     raise Exception(f"Unknown Error: {e}")
 
-    def get_proposals(self, filters, retry_count: int = 3) -> Optional[dict]:
+    @lardi_api_retry_on_401
+    async def get_proposals(self, filters) -> Optional[dict]:
         """
         Завантажує дані за фільтрами користувача.
         """
-
         payload = {
             "page": self.page,
             "size": self.page_size,
@@ -201,38 +257,43 @@ class LardiClient:
             "filter": filters,
         }
 
-        self._update_headers_with_cookies()
+        response = await sync_to_async(requests.post)(self.url, headers=self.headers, json=payload)
+        response.raise_for_status()
+        return response.json()
 
-        try:
-            response = requests.post(self.url, headers=self.headers, json=payload)
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 401:
-                logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
-                if retry_count > 0:
-                    if _cookie_manager.refresh_lardi_cookies():
-                        logger.info("Cookie успішно оновлено. Повторюємо запит.")
-                        self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
-                        return self.get_proposals(retry_count - 1)  # Повторюємо запит
-                    else:
-                        logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
-                        raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
-                else:
-                    logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
-                    raise Exception(f"Error {response.status_code}: {response.text}")
-            else:
-                logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
-                raise Exception(f"Error {response.status_code}: {response.text}")
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Помилка мережі при завантаженні даних: {e}")
-            raise Exception(f"Network Error: {e}")
-
-        except Exception as e:
-            logger.error(f"Невідома помилка при завантаженні даних: {e}")
-            raise Exception(f"Unknown Error: {e}")
+        #
+        # self._update_headers_with_cookies()
+        #
+        # try:
+        #     response = requests.post(self.url, headers=self.headers, json=payload)
+        #     response.raise_for_status()
+        #     return response.json()
+        #
+        # except requests.exceptions.HTTPError as e:
+        #     if response.status_code == 401:
+        #         logger.warning(f"Отримано 401 Unauthorized під час завантаження даних. Спроба оновити cookie.")
+        #         if retry_count > 0:
+        #             if _cookie_manager.refresh_lardi_cookies():
+        #                 logger.info("Cookie успішно оновлено. Повторюємо запит.")
+        #                 self._update_headers_with_cookies()  # Оновлюємо заголовки після оновлення cookie
+        #                 return self.get_proposals(retry_count - 1)  # Повторюємо запит
+        #             else:
+        #                 logger.error("Не вдалося оновити cookie. Не можу повторити запит.")
+        #                 raise Exception(f"Error 401: Не вдалося авторизуватись, неможливо оновити cookie.")
+        #         else:
+        #             logger.error(f"Не вдалося завантажити дані після повторної спроби. Максимальна кількість спроб.")
+        #             raise Exception(f"Error {response.status_code}: {response.text}")
+        #     else:
+        #         logger.error(f"Непередбачена HTTP помилка під час завантаження даних: {e}")
+        #         raise Exception(f"Error {response.status_code}: {response.text}")
+        #
+        # except requests.exceptions.RequestException as e:
+        #     logger.error(f"Помилка мережі при завантаженні даних: {e}")
+        #     raise Exception(f"Network Error: {e}")
+        #
+        # except Exception as e:
+        #     logger.error(f"Невідома помилка при завантаженні даних: {e}")
+        #     raise Exception(f"Unknown Error: {e}")
 
     @sync_to_async
     def _get_filter_object_for_user(self, user_id: int):
@@ -249,13 +310,12 @@ class LardiClient:
             logger.warning(f"LardiSearchFilter not found for user {user_id}. Using default filters.")
             return None
 
+    @lardi_api_retry_on_401
     async def get_offers(self, user_telegram_id: int) -> Optional[List[Dict[str, Any]]]:
         """
         Асинхронно отримує список вантажів з Lardi-Trans API, використовуючи фільтри
         з бази даних для конкретного користувача, або дефолтні.
         """
-        self._update_headers_with_cookies()
-
         lardi_filter_obj = await self._get_filter_object_for_user(user_telegram_id)
         if lardi_filter_obj:
             payload = user_filter_to_dict(lardi_filter_obj)
@@ -264,29 +324,17 @@ class LardiClient:
             payload = self.default_filters()
             logger.info(f"Фільтри не знайдено для користувача {user_telegram_id}. Використано фільтри за замовчуванням.")
 
-        try:
-            response = requests.post(self.url, headers=self.headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("proposals")
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP Error: {e.response.status_code} - {e.response.text}")
-            raise Exception(f"HTTP Error: {e.response.status_code} - {e.response.text}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request Error: {e}")
-            raise Exception(f"Request Error: {e}")
-        except Exception as e:
-            logger.error(f"Невідома помилка при завантаженні даних: {e}")
-            raise Exception(f"Unknown Error: {e}")
+        response = await sync_to_async(requests.post)(self.url, headers=self.headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("proposals", [])
 
-
+    @lardi_api_retry_on_401
     async def get_all_offers(self, user_telegram_id: int) -> list:
         """
         Асинхронно отримує всі вантажі з Lardi-Trans API, використовуючи фільтри
         з бази даних для конкретного користувача, або дефолтні.
         """
-        self._update_headers_with_cookies()
-
         lardi_filter_obj = await self._get_filter_object_for_user(user_telegram_id)
         if lardi_filter_obj:
             filters = user_filter_to_dict(lardi_filter_obj)
@@ -307,11 +355,9 @@ class LardiClient:
                 "sortByCountryFirst": self.sort_by_country,
                 "filter": filters,
             }
-            self._update_headers_with_cookies()
 
             try:
-                response = requests.post(self.url, headers=self.headers, json=payload)
-                # logger.info(f"LardiAPI - INFO - RESPONSE {response.json()}")
+                response = await sync_to_async(requests.post)(self.url, headers=self.headers, json=payload)
                 response.raise_for_status()
                 data = response.json()
                 proposals = data.get("result", {}).get("proposals", [])
@@ -324,18 +370,43 @@ class LardiClient:
                 if not proposals or len(proposals) < page_size:
                     break
                 page += 1
-            except Exception as e:
-                logger.error(f"Помилка при отриманні сторінки {page} вантажів: {e}")
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"LardiAPI - ERROR - {e.response.status_code}: {e}")
                 break
+            except requests.exceptions.RequestException as e:
+                logger.error(f"LardiAPI - ERROR - {e}")
+                break
+
         logger.info(f"LardiAPI - INFO - Завершено. Всього сторінок: {total_pages}. Всього вантажів: {len(all_proposals)}")
         return all_proposals
+
+        #
+        #     try:
+        #         response = requests.post(self.url, headers=self.headers, json=payload)
+        #         # logger.info(f"LardiAPI - INFO - RESPONSE {response.json()}")
+        #         response.raise_for_status()
+        #         data = response.json()
+        #         proposals = data.get("result", {}).get("proposals", [])
+        #         logger.info(f"LardiAPI - INFO - Сторінка {page}: отримано {len(proposals)} вантажів")
+        #         if not isinstance(proposals, list):
+        #             logger.warning(f"LardiAPI - WARNING - proposals не є списком: {proposals}")
+        #             proposals = []
+        #         all_proposals.extend([p for p in proposals if isinstance(p, dict)])
+        #         total_pages += 1
+        #         if not proposals or len(proposals) < page_size:
+        #             break
+        #         page += 1
+        #     except Exception as e:
+        #         logger.error(f"Помилка при отриманні сторінки {page} вантажів: {e}")
+        #         break
+        # logger.info(f"LardiAPI - INFO - Завершено. Всього сторінок: {total_pages}. Всього вантажів: {len(all_proposals)}")
+        # return all_proposals
 
 
 class LardiNotificationClient(LardiClient):
     """
     Клієнт для Lardi-Trans API, спеціалізований на пошуку нових вантажів для сповіщень.
     """
-
     async def get_new_offers(self, user_telegram_id: int, last_notification_time: datetime) -> List[Dict[str, Any]]:
         """
         Отримує список нових вантажів, створених після last_notification_time,
@@ -353,8 +424,6 @@ class LardiNotificationClient(LardiClient):
             created_at_str = offer.get('dateCreate')
             if created_at_str:
                 try:
-                    # Розбираємо дату з урахуванням мілісекунд та часового поясу
-                    # Приклад: "2024-06-24T10:30:00.123+03:00" або "2024-06-24T10:30:00"
                     if '.' in created_at_str and '+' in created_at_str:
                         dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S.%f%z')
                     elif '.' in created_at_str:
@@ -366,8 +435,13 @@ class LardiNotificationClient(LardiClient):
                         dt_object = datetime.strptime(created_at_str, '%Y-%m-%dT%H:%M:%S')
                         dt_object = dt_object.replace(tzinfo=timezone.utc)  # Припускаємо UTC, якщо немає зони
 
+                    # Приведення last_notification_time до UTC, якщо воно не має tzinfo
                     if last_notification_time.tzinfo is None:
                         last_notification_time = last_notification_time.replace(tzinfo=timezone.utc)
+                    if dt_object.tzinfo is not None and dt_object.tzinfo.utcoffset(dt_object) is not None:
+                        dt_object = dt_object.astimezone(timezone.utc)
+                    else:
+                        dt_object = dt_object.replace(tzinfo=timezone.utc)
 
                     if dt_object > last_notification_time:
                         new_offers.append(offer)

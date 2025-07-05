@@ -1,9 +1,9 @@
-# modules/notifications_module.py
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import re
+
+from django.utils import timezone
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -96,13 +96,13 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
             **escaped_message_parts
         )
     except KeyError as e:
-        logger.error(f"Помилка форматування шаблону 'text_notification_new_cargo'. Відсутня змінна {e} у даних вантажу або escape_markdown_v2: {cargo}. Шаблон: {template}")
+        logger.error(
+            f"Помилка форматування шаблону 'text_notification_new_cargo'. Відсутня змінна {e} у даних вантажу або escape_markdown_v2: {cargo}. Шаблон: {template}")
         return await bot.send_message(
             chat_id=user_profile.telegram_id,
             text="Не вдалось сформувати повідомлення про новий вантаж.",
             parse_mode=ParseMode.HTML,
         )
-
 
     try:
         await bot.send_message(
@@ -137,7 +137,7 @@ async def notification_checker(bot: Bot):
     """
     while True:
         try:
-            logger.info("Запуск перевірки сповіщень...")
+            logger.info("Запуск періодичної перевірки вантажів для сповіщень...")
             users_to_notify = await get_active_notification_users()
             logger.info(f"Користувачі для сповіщень (id): {[u.id for u in users_to_notify]}")
 
@@ -158,13 +158,23 @@ async def notification_checker(bot: Bot):
                     if new_cargos:
                         logger.info(f"Знайдено {len(new_cargos)} нових вантажів для {user_profile.user.username}.")
                         for cargo in new_cargos:
-                            await asyncio.sleep(0.3)
+                            await asyncio.sleep(0.5)
                             await send_cargo_notification(bot, user_profile, cargo)
                     else:
                         logger.info(f"Не знайдено нових вантажів для {user_profile.user.username}.")
 
+
                 except Exception as e:
                     logger.error(f"Помилка при перевірці сповіщень для користувача {user_profile.user.username}: {e}")
+
+                @sync_to_async
+                def update_user_notification_time(user_prof_obj, time_to_set):
+                    user_prof_obj.notification_time = time_to_set
+                    user_prof_obj.save(update_fields=["notification_time"])
+                    local_time_for_log = timezone.localtime(time_to_set)
+                    logger.info(f"Оновлено notification_time до {local_time_for_log} для користувача {user_prof_obj.user.username}.")
+
+                await update_user_notification_time(user_profile, timezone.now())
 
         except Exception as e:
             logger.error(f"FATAL ERROR in notification_checker: {e}", exc_info=True)
