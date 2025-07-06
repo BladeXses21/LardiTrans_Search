@@ -94,6 +94,11 @@ class SettingsManager:
             "{repeated}"
         ),
 
+        # Текст для фільтра країн
+        "text_select_country_from": "Оберіть країну відправлення:",
+        "text_select_country_to": "Оберіть країну призначення",
+        "text_countries_menu": "Оберіть країни зі списку. Обрану країну позначено ✅:"
+
     }
 
     def get(self, key: str):

@@ -27,6 +27,8 @@ class CookieManager:
         self.username = env_config.LARDI_USERNAME
         self.password = env_config.LARDI_PASSWORD
 
+        self.authenticated_page_url = "https://lardi-trans.com/log/search/gruz/"
+
     def _load_cookies(self) -> dict:
         """Завантажує cookie з файлу JSON."""
         if os.path.exists(self.cookies_file):
@@ -118,12 +120,27 @@ class CookieManager:
             wait = WebDriverWait(driver, 30)
 
             logger.info(f"Спроба перейти на автентифіковану сторінку для перевірки статусу входу: {self.login_url}")
-            driver.get(self.login_url)
+            driver.get(self.authenticated_page_url)
             time.sleep(2)
 
-            # if self.login_url not in driver.current_url:
-            #     logger.info("Браузер, схоже, вже авторизований. Копіюємо cookie.")
-            #     all
+            if self.login_url not in driver.current_url:
+                logger.info("Браузер, схоже, вже авторизований. Копіюємо cookie")
+                all_browser_cookies = driver.get_cookies()
+                new_cookies = {}
+                for cookie in all_browser_cookies:
+                    new_cookies[cookie['name']] = cookie['value']
+
+                if new_cookies:
+                    self.cookies.update(new_cookies)
+                    self._save_cookies()
+                    logger.info("Cookie Lardi-Trans успішно оновлено (перезавантажено з вже авторизованої сторінки).")
+                    return True
+                else:
+                    logger.warning("Після перевірки авторизації не отримано нових cookie. Спроба авторизуватись.")
+
+            logger.info(f"Перехід на сторінку входу: {self.login_url}")
+            driver.get(self.login_url)
+            time.sleep(1)
 
             login_field_xpath = "//input[@name='login']"
             username_input = wait.until(EC.presence_of_element_located((By.XPATH, login_field_xpath)))
@@ -133,9 +150,17 @@ class CookieManager:
             password_input = wait.until(EC.presence_of_element_located((By.XPATH, password_field_xpath)))
             logger.info(f"Знайдено поле паролю за XPath: {password_field_xpath}")
 
-            username_input.send_keys(self.username)
-            password_input.send_keys(self.password)
-            logger.info("Введено логін та пароль.")
+            if username_input.get_attribute('value'):
+                logger.info("Поле логіну вже заповнене. Пропускаємо введення.")
+            else:
+                username_input.send_keys(self.username)
+                logger.info("Введено логін.")
+
+            if password_input.get_attribute('value'):
+                logger.info("Поле паролю вже заповнене. Пропускаємо введення.")
+            else:
+                password_input.send_keys(self.password)
+                logger.info("Введено пароль.")
 
             remember_me_checkbox_xpath = "//span[@class='passport-checkbox__label']"
             try:
@@ -156,14 +181,11 @@ class CookieManager:
             time.sleep(1)
             login_button.click()
 
-            session_limit_status = self._handle_session_limit_modal(driver)
+            self._handle_session_limit_modal(driver)
 
             time.sleep(2)
 
-            if session_limit_status is True:
-                input("Потрібно знайти xpath закриття popup вікна із сесіями")
-
-            if "accounts/login" in driver.current_url:
+            if self.login_url in driver.current_url:
                 if "Неправильный логин или пароль" in driver.page_source or "Incorrect login or password" in driver.page_source:
                     logger.error("Вхід не вдався: невірний логін або пароль.")
                     return False

@@ -1,6 +1,6 @@
 import os
 import django
-from modules.cookie_manager import CookieManager
+import requests
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lardiweb.settings')
 django.setup()
@@ -18,6 +18,9 @@ from asgiref.sync import sync_to_async
 from modules.app_config import env_config
 from modules.handlers import user_handlers, admin_handlers, payment_handlers
 from modules.web_server import webapp_handler, cargo_details_proxy_api
+from modules.cookie_manager import CookieManager
+from modules.handlers.user_handlers import lardi_client
+from modules.lardi_api_client import LardiGeoClient
 
 from django.utils import timezone
 from users.models import UserProfile
@@ -112,6 +115,14 @@ async def main() -> None:
     cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
     logger.info("Запущено фонову задачу оновлення Lardi-Trans cookie.")
 
+    try:
+        get_client = LardiGeoClient()
+        logger.info("Testing LardiGeoClient.get_geo_data for 'Львів'...")
+        lviv_data = await get_client.get_geo_data(query="Львів")
+        logger.info(f"Geographical data for 'Львів': {lviv_data}")
+    except Exception as e:
+        logger.error(f"Error testing LardiGeoClient: {e}")
+
     # Запускаємо бота
     logger.info("Бот запущено!")
     await dp.start_polling(bot)
@@ -119,7 +130,12 @@ async def main() -> None:
     # Очікуємо завершення фонових задач (це може бути корисно при зупинці програми)
     await web_server_task
     await notification_task
-    await cookie_refresh_task
+
+    try:
+        await lardi_client.get_proposals(filters=lardi_client.default_filter)
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            await cookie_refresh_task
 
 if __name__ == "__main__":
 

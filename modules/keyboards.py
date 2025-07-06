@@ -2,9 +2,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from modules.app_config import settings_manager, env_config
 import json
-from typing import Optional # Додаємо Optional
+from typing import Optional, List  # Додаємо Optional
 
-from modules.utils import boolean_options_names
+from modules.utils import boolean_options_names, ALL_COUNTRIES_FOR_SELECTION, COUNTRIES_PER_PAGE
 
 
 def get_main_menu_keyboard(notifications_enable: Optional[bool] = None) -> InlineKeyboardMarkup:
@@ -54,7 +54,7 @@ def get_filter_main_menu_keyboard() -> InlineKeyboardMarkup:
     Повертає головне меню для зміни фільтрів.
     """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_directions"), callback_data="filter_directions_menu"))
+    builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_directions"), callback_data="direction_filter_menu"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_cargo_params"), callback_data="filter_cargo_params_menu"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_load_types"), callback_data="filter_load_types_menu"))
     builder.row(InlineKeyboardButton(text=settings_manager.get("text_filter_payment_forms"), callback_data="filter_payment_forms_menu"))
@@ -173,6 +173,69 @@ def get_payment_forms_keyboard(selected_payment_forms: list) -> InlineKeyboardMa
 
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
     return builder.as_markup()
+
+
+def get_direction_filter_menu_keyboard() -> InlineKeyboardMarkup:
+    """
+    Клавіатура для меню налаштування напрямків.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📍 Країна відправлення", callback_data="set_direction_from_country"))
+    builder.row(InlineKeyboardButton(text="🗺️ Країна призначення", callback_data="set_direction_to_country"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
+    return builder.as_markup()
+
+
+def get_country_options_keyboard(selected_countries: List[str], current_page: int = 0, is_from_direction: bool = True) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для вибору країни для перевезень з пагінацією.
+    :param selected_countries: Список кодів обраних країн (наприклад, ['UA', 'PL']).
+    :param current_page: Поточна сторінка (0-індекс).
+    :param is_from_direction: True, якщо обираємо країну відправлення, False для призначення.
+    """
+    builder = InlineKeyboardBuilder()
+
+    all_country_codes = list(ALL_COUNTRIES_FOR_SELECTION.keys())
+    total_countries = len(all_country_codes)
+    total_pages = (total_countries + COUNTRIES_PER_PAGE - 1) // COUNTRIES_PER_PAGE
+
+    start_index = current_page * COUNTRIES_PER_PAGE
+    end_index = min(start_index + COUNTRIES_PER_PAGE, total_pages)
+
+    for i in range(start_index, end_index):
+        country_code = all_country_codes[i]
+        country_name = ALL_COUNTRIES_FOR_SELECTION[country_code]
+        checkmark = "✅ " if country_code in selected_countries else ""
+
+        callback_prefix = "select_from_country" if is_from_direction else "select_to_country"
+
+        builder.row(InlineKeyboardButton(
+            text=f"{checkmark} {country_name}",
+            callback_data=f"{callback_prefix}:{country_code}:{current_page}"
+        ))
+
+    pagination_row = []
+    if current_page > 0:
+        pagination_row.append(InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=f"country_page:{'from' if is_from_direction else 'to'}:prev:{current_page}"
+        ))
+
+        if current_page < total_pages - 1:
+            pagination_row.append(InlineKeyboardButton(
+                text="Вперед ➡️",
+                callback_data=f"country_page:{'from' if is_from_direction else 'to'}:next:{current_page}"
+            ))
+
+        if pagination_row:
+            builder.row(*pagination_row)
+
+        builder.row(InlineKeyboardButton(
+            text="⬅️ Назад до головного меню",
+            callback_data="get_filter_main_menu_keyboard"
+        ))
+        return builder.as_markup()
+
 
 
 def get_boolean_options_keyboard(current_filters: dict) -> InlineKeyboardMarkup:

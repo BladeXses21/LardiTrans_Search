@@ -13,11 +13,11 @@ from users.models import UserProfile
 from modules.lardi_api_client import lardi_notification_client
 from modules.keyboards import get_cargo_details_webapp_keyboard
 from modules.app_config import settings_manager
-from modules.utils import add_line, date_format
+from modules.utils import date_format
 
 logger = logging.getLogger(__name__)
 
-NOTIFICATION_CHECK_INTERVAL = 50  # 5 хвилин у секундах
+NOTIFICATION_CHECK_INTERVAL = 30  # 5 хвилин у секундах
 
 
 def escape_markdown_v2(text: str) -> str:

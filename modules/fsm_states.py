@@ -29,5 +29,9 @@ class FilterForm(StatesGroup):
     waiting_for_width2 = State()
     waiting_for_height1 = State()
     waiting_for_height2 = State()
+
+    waiting_for_country_from = State() # Очікування вибору країни відправлення
+    waiting_for_country_to = State()   # Очікування вибору країни призначення
+
     # Додати інші стани для інших фільтрів, які потребують введення тексту
 
