@@ -60,6 +60,8 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
 
     await update_cargo_skip(user_profile, cargo_id)
 
+    from_address = str(cargo.get("waypointListSource", [{}])[0].get("address", "-"))
+    to_address = str(cargo.get("waypointListTarget", [{}])[0].get("address", "-"))
     message_parts = {
         "cargo_id": str(cargo_id),
         "dateFrom": str(date_format(cargo.get("dateFrom", "-"))),
@@ -70,12 +72,12 @@ async def send_cargo_notification(bot: Bot, user_profile: UserProfile, cargo: Di
         "from_town": str(cargo.get("waypointListTarget", [{}])[0].get("town", "-")),
         "from_region": str(cargo.get("waypointListTarget", [{}])[0].get("region", "-")),
         "from_countrySign": str(cargo.get("waypointListTarget", [{}])[0].get("countrySign", "-")),
-        "from_address": str(cargo.get("waypointListTarget", [{}])[0].get("address", "-")),
+        "from_address": from_address if not None else "Пусто",
 
         "to_town": str(cargo.get("waypointListTarget", [{}])[0].get("town", "-")),
         "to_region": str(cargo.get("waypointListTarget", [{}])[0].get("region", "-")),
         "to_countrySign": str(cargo.get("waypointListTarget", [{}])[0].get("countrySign", "-")),
-        "to_address": str(cargo.get("waypointListTarget", [{}])[0].get("address", "-")),
+        "to_address": to_address if not None else "Пусто",
 
         "loadTypes": str(cargo.get("loadTypes", "-")),
         "gruzName": str(cargo.get("gruzName", "-")),

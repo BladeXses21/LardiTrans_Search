@@ -66,16 +66,20 @@ class CookieManager:
         Повертає True, якщо модальне вікно було оброблено, False - інакше.
         """
         delete_button_xpath = "//button[contains(@class, 'passport--limit-modal__sessions__session__delete')]"
+        next_button_xpath = "//button[text()='Продовжити']"
         try:
             logger.info("Перевіряю наявність кнопки видалення сесії...")
-            delete_button = WebDriverWait(driver, 30).until(
+            delete_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, delete_button_xpath))
             )
             logger.warning("Знайдено кнопку видалення сесії. Натискаю...")
             delete_button.click()
             # Чекаємо, поки модальне вікно зникне або сторінка оновиться
-            time.sleep(0.5)
             logger.info("Кнопку видалення сесії натиснуто.")
+            next_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, next_button_xpath))
+            )
+            next_button.click()
             return True
         except TimeoutException:
             logger.info("Кнопка видалення сесії не знайдена (таймаут).")
@@ -190,6 +194,7 @@ class CookieManager:
                     logger.error("Вхід не вдався: невірний логін або пароль.")
                     return False
                 logger.error("Вхід не вдався: залишилися на сторінці входу без явного повідомлення про помилку.")
+                input("СТОП: Вхід не вдався: залишилися на сторінці входу без явного повідомлення про помилку.")
                 return False
 
             all_browser_cookies = driver.get_cookies()
@@ -208,6 +213,7 @@ class CookieManager:
 
         except TimeoutException:
             logger.error("Таймаут очікування елементів або завантаження сторінки під час входу через Selenium.")
+            input("СТОП: Таймаут очікування елементів або завантаження сторінки під час входу через Selenium.")
             return False
         except WebDriverException as e:
             logger.error(f"Помилка WebDriver під час входу через Selenium: {e}")

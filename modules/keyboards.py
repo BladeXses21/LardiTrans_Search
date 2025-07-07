@@ -200,7 +200,7 @@ def get_country_options_keyboard(selected_countries: List[str], current_page: in
     total_pages = (total_countries + COUNTRIES_PER_PAGE - 1) // COUNTRIES_PER_PAGE
 
     start_index = current_page * COUNTRIES_PER_PAGE
-    end_index = min(start_index + COUNTRIES_PER_PAGE, total_pages)
+    end_index = min(start_index + COUNTRIES_PER_PAGE, total_countries)
 
     for i in range(start_index, end_index):
         country_code = all_country_codes[i]
@@ -215,27 +215,28 @@ def get_country_options_keyboard(selected_countries: List[str], current_page: in
         ))
 
     pagination_row = []
+
     if current_page > 0:
         pagination_row.append(InlineKeyboardButton(
             text="⬅️ Назад",
             callback_data=f"country_page:{'from' if is_from_direction else 'to'}:prev:{current_page}"
         ))
 
-        if current_page < total_pages - 1:
-            pagination_row.append(InlineKeyboardButton(
-                text="Вперед ➡️",
-                callback_data=f"country_page:{'from' if is_from_direction else 'to'}:next:{current_page}"
-            ))
-
-        if pagination_row:
-            builder.row(*pagination_row)
-
-        builder.row(InlineKeyboardButton(
-            text="⬅️ Назад до головного меню",
-            callback_data="get_filter_main_menu_keyboard"
+    if current_page < total_pages - 1:
+        pagination_row.append(InlineKeyboardButton(
+            text="Вперед ➡️",
+            callback_data=f"country_page:{'from' if is_from_direction else 'to'}:next:{current_page}"
         ))
-        return builder.as_markup()
 
+    if pagination_row:
+        builder.row(*pagination_row)
+
+    builder.row(InlineKeyboardButton(
+        text="⬅️ Назад до меню фільтрів",
+        callback_data="back_to_filter_main_menu"
+    ))
+
+    return builder.as_markup()
 
 
 def get_boolean_options_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
@@ -246,13 +247,11 @@ def get_boolean_options_keyboard(current_filters: dict) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     for param_name, display_name in boolean_options_names.items():
-        # param_name буде snake_case (наприклад, "only_new")
-        current_value = current_filters.get(param_name, False) # Отримуємо значення за snake_case ключем
+        current_value = current_filters.get(param_name, False)
 
         status = "✅" if current_value is True else "❌"
         button_text = f"{status} {display_name}"
 
-        # callback_data буде виглядати "toggle_boolean_only_new" (snake_case)
         builder.row(InlineKeyboardButton(text=button_text, callback_data=f"toggle_boolean_{param_name}"))
 
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))

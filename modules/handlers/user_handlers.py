@@ -2,7 +2,7 @@ import json
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.state import State
-from typing import Optional
+from typing import Optional, List, Union, Any, Dict
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -861,6 +861,45 @@ async def cb_toggle_payment_form(callback: CallbackQuery):
     await callback.answer(message_text, show_alert=False)
 
 
+# Функція для вилучення countrySign з JSON-поля
+def _extract_country_signs(direction_data: Union[Dict[str, Any], List[Any], str, None]) -> List[str]:
+    """
+    Вилучає коди країн зі структури даних напрямку (direction_data).
+    Робить це стійко до різних можливих форматів збережених даних (словник, список, JSON-рядок).
+    """
+    selected_countries = []
+
+    parsed_data = None
+    if isinstance(direction_data, str):
+        try:
+            parsed_data = json.loads(direction_data)
+        except json.JSONDecodeError:
+            if len(direction_data) == 2 and direction_data.isalpha():
+                return [direction_data.upper()]
+            return []
+    elif isinstance(direction_data, (dict, list)):
+        parsed_data = direction_data
+    elif direction_data is None:
+        return []
+
+    if isinstance(parsed_data, dict) and "directionRows" in parsed_data \
+            and isinstance(parsed_data["directionRows"], list):
+        for row in parsed_data["directionRows"]:
+            if isinstance(row, dict) and "countrySign" in row:
+                selected_countries.append(row["countrySign"])
+    elif isinstance(parsed_data, list):
+        for item in parsed_data:
+            if isinstance(item, dict) and "directionRows" in item \
+                    and isinstance(item["directionRows"], list):
+                for row in item["directionRows"]:
+                    if isinstance(row, dict) and "countrySign" in row:
+                        selected_countries.append(row["countrySign"])
+            elif isinstance(item, str) and len(item) == 2 and item.isalpha():
+                selected_countries.append(item)
+
+    return [c.upper() for c in list(set(selected_countries))]
+
+
 @router.callback_query(F.data == "direction_filter_menu")
 async def cb_direction_filter_menu(callback: CallbackQuery, state: FSMContext):
     """
@@ -882,19 +921,10 @@ async def cb_set_direction_from_country(callback: CallbackQuery, state: FSMConte
     telegram_id = callback.from_user.id
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    # Перетворюємо збережене значення в список, якщо це рядок
-    current_selected_countries = []
-    if lardi_filter_obj.direction_from:
-        try:
-            # Припускаємо, що direction_from зберігається як JSON-масив або comma-separated string
-            current_selected_countries = json.loads(lardi_filter_obj.direction_from)
-            if not isinstance(current_selected_countries, list):
-                current_selected_countries = [lardi_filter_obj.direction_from]  # Якщо не список, то це один елемент
-        except (json.JSONDecodeError, TypeError):
-            current_selected_countries = [lardi_filter_obj.direction_from]  # Якщо не JSON, то це один елемент
+    current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_from)
 
     await callback.message.edit_text(
-        "1",
+        settings_manager.get("text_countries_menu"),
         reply_markup=get_country_options_keyboard(current_selected_countries, current_page=0, is_from_direction=True)
     )
     await state.set_state(FilterForm.waiting_for_country_from)
@@ -909,14 +939,7 @@ async def cb_set_direction_to_country(callback: CallbackQuery, state: FSMContext
     telegram_id = callback.from_user.id
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    current_selected_countries = []
-    if lardi_filter_obj.direction_to:
-        try:
-            current_selected_countries = json.loads(lardi_filter_obj.direction_to)
-            if not isinstance(current_selected_countries, list):
-                current_selected_countries = [lardi_filter_obj.direction_to]
-        except (json.JSONDecodeError, TypeError):
-            current_selected_countries = [lardi_filter_obj.direction_to]
+    current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_to)
 
     await callback.message.edit_text(
         "2",
@@ -932,46 +955,48 @@ async def cb_country_pagination(callback: CallbackQuery, state: FSMContext):
     Обробляє навігацію по сторінках вибору країн.
     Callback data: "country_page:{'from'|'to'}:{'prev'|'next'}:{current_page}"
     """
-    parts = callback.data.split(':')
-    direction_type = parts[1]  # 'from' або 'to'
-    action = parts[2]  # 'prev' або 'next'
-    current_page = int(parts[3])
+    try:
+        data = callback.data.split(':')
+        direction_type = data[1]  # 'from' або 'to'
+        action = data[2]  # 'prev' або 'next'
+        current_page = int(data[3]) # Поточна сторінка, з якої йде запит
 
-    is_from_direction = (direction_type == 'from')
+        telegram_id = callback.from_user.id
+        lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    all_country_codes = list(ALL_COUNTRIES_FOR_SELECTION.keys())
-    total_countries = len(all_country_codes)
-    total_pages = (total_countries + COUNTRIES_PER_PAGE - 1) // COUNTRIES_PER_PAGE
+        is_from_direction = (direction_type == 'from')
 
-    new_page = current_page
-    if action == 'next' and current_page < total_pages - 1:
-        new_page += 1
-    elif action == 'prev' and current_page > 0:
-        new_page -= 1
+        if is_from_direction:
+            current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_from)
+        else:
+            current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_to)
 
-    user_profile = await sync_to_async(UserProfile.objects.get)(telegram_id=callback.from_user.id)
-    user_filter = await sync_to_async(LardiSearchFilter.objects.get_or_create)(user=user_profile)[0]
+        all_country_codes = list(ALL_COUNTRIES_FOR_SELECTION.keys())
+        total_countries = len(all_country_codes)
+        total_pages = (total_countries + COUNTRIES_PER_PAGE - 1) // COUNTRIES_PER_PAGE
 
-    current_selected_countries = []
-    if is_from_direction and user_filter.direction_from:
-        try:
-            current_selected_countries = json.loads(user_filter.direction_from)
-            if not isinstance(current_selected_countries, list):
-                current_selected_countries = [user_filter.direction_from]
-        except (json.JSONDecodeError, TypeError):
-            current_selected_countries = [user_filter.direction_from]
-    elif not is_from_direction and user_filter.direction_to:
-        try:
-            current_selected_countries = json.loads(user_filter.direction_to)
-            if not isinstance(current_selected_countries, list):
-                current_selected_countries = [user_filter.direction_to]
-        except (json.JSONDecodeError, TypeError):
-            current_selected_countries = [user_filter.direction_to]
+        new_page = current_page
 
-    await callback.message.edit_reply_markup(
-        reply_markup=get_country_options_keyboard(current_selected_countries, new_page, is_from_direction)
-    )
-    await callback.answer()
+        if action == 'next':
+            if current_page < total_pages - 1:
+                new_page = current_page + 1
+        elif action == 'prev':
+            if current_page > 0:
+                new_page = current_page - 1
+
+        if new_page != current_page:
+            await callback.message.edit_reply_markup(
+                reply_markup=get_country_options_keyboard(
+                    current_selected_countries,
+                    current_page=new_page,
+                    is_from_direction=is_from_direction
+                )
+            )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Помилка в cb_country_pagination: {e}", exc_info=True)
+        await callback.answer("Виникла помилка при зміні сторінки країн.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("select_from_country:"))
@@ -982,62 +1007,90 @@ async def cb_select_country(callback: CallbackQuery, state: FSMContext):
     Callback data: "select_from_country:{country_code}:{current_page}"
     Callback data: "select_to_country:{country_code}:{current_page}"
     """
-    parts = callback.data.split(':')
-    callback_prefix = parts[0]  # "select_from_country" або "select_to_country"
-    country_code = parts[1]
-    current_page = int(parts[2])
+    data = callback.data.split(':')
+    callback_prefix = data[0]
+    country_code = data[1]
+    current_page = int(data[2])
 
     is_from_direction = (callback_prefix == "select_from_country")
 
-    user_profile = await sync_to_async(UserProfile.objects.get)(telegram_id=callback.from_user.id)
-    user_filter = await sync_to_async(LardiSearchFilter.objects.get_or_create)(user=user_profile)[0]
+    telegram_id = callback.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    current_selected_countries = []
+    # --- ЛОГУВАННЯ ДЛЯ ДІАГНОСТИКИ ---
+    logger.info(f"cb_select_country: Запущено для user_id={telegram_id}, country_code={country_code}, direction_type={'from' if is_from_direction else 'to'}")
+    logger.info(f"cb_select_country: LardiSearchFilter ID: {lardi_filter_obj.id}")
+    logger.info(f"cb_select_country: direction_from (з БД ДО обробки): {lardi_filter_obj.direction_from}")
+    logger.info(f"cb_select_country: direction_to (з БД ДО обробки): {lardi_filter_obj.direction_to}")
+    # --- КІНЕЦЬ ЛОГІВ ---
+
     if is_from_direction:
-        if user_filter.direction_from:
-            try:
-                current_selected_countries = json.loads(user_filter.direction_from)
-                if not isinstance(current_selected_countries, list):
-                    current_selected_countries = [user_filter.direction_from]
-            except (json.JSONDecodeError, TypeError):
-                current_selected_countries = [user_filter.direction_from]
-    else:  # direction_to
-        if user_filter.direction_to:
-            try:
-                current_selected_countries = json.loads(user_filter.direction_to)
-                if not isinstance(current_selected_countries, list):
-                    current_selected_countries = [user_filter.direction_to]
-            except (json.JSONDecodeError, TypeError):
-                current_selected_countries = [user_filter.direction_to]
-
-    # Додаємо або видаляємо країну зі списку
-    if country_code in current_selected_countries:
-        current_selected_countries.remove(country_code)
+        current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_from)
     else:
-        current_selected_countries.append(country_code)
+        current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_to)
 
-    # Оновлюємо фільтр користувача
+    logger.info(f"cb_select_country: current_selected_countries (після _extract_country_signs): {current_selected_countries}")
+
+    new_selected_countries_data = {"directionRows": []}
+
+    if country_code.upper() in [c.upper() for c in current_selected_countries]:
+        logger.info(f"cb_select_country: Країна {country_code} вже була обрана. Знімаємо вибір.")
+    else:
+        new_selected_countries_data["directionRows"].append({"countrySign": country_code.upper()})
+        logger.info(f"cb_select_country: Обрано країну {country_code}. Тепер це єдина обрана країна.")
+
     if is_from_direction:
-        user_filter.direction_from = json.dumps(current_selected_countries)
+        lardi_filter_obj.direction_from = new_selected_countries_data
+        logger.info(f"cb_select_country: Призначаємо direction_from: {new_selected_countries_data}")
     else:
-        user_filter.direction_to = json.dumps(current_selected_countries)
+        lardi_filter_obj.direction_to = new_selected_countries_data
+        logger.info(f"cb_select_country: Призначаємо direction_to: {new_selected_countries_data}")
 
-    await sync_to_async(user_filter.save)()
+    logger.info(f"cb_select_country: LardiSearchFilter перед збереженням. direction_from: {lardi_filter_obj.direction_from}")
+    logger.info(f"cb_select_country: LardiSearchFilter перед збереженням. direction_to: {lardi_filter_obj.direction_to}")
 
-    # Оновлюємо клавіатуру, щоб відобразити зміну вибору
-    await callback.message.edit_reply_markup(
-        reply_markup=get_country_options_keyboard(current_selected_countries, current_page, is_from_direction)
-    )
-    # Змінюємо текст повідомлення, щоб показати кількість обраних країн
-    selected_count_text = f"Обрано країн: {len(current_selected_countries)}" if current_selected_countries else "Жодної країни не обрано"
     try:
-        await callback.message.edit_text(f"{settings_manager.get('text_countries_menu')}\n\n{selected_count_text}",
-                                         reply_markup=callback.message.reply_markup)
-    except TelegramBadRequest as e:
-        # Ігноруємо помилку, якщо текст не змінився (наприклад, тільки галочка)
-        logger.warning(f"TelegramBadRequest: {e}. Ignoring, probably text not changed enough.")
+        await sync_to_async(lardi_filter_obj.save)()
+        logger.info(f"cb_select_country: Фільтр LardiSearchFilter (ID: {lardi_filter_obj.id}) УСПІШНО збережено в БД.")
+    except Exception as e:
+        logger.error(f"cb_select_country: ПОМИЛКА при збереженні LardiSearchFilter (ID: {lardi_filter_obj.id}): {e}", exc_info=True)
+        await callback.message.answer(settings_manager.get("text_error_saving_filters", default="Помилка при збереженні фільтрів."))
 
-    await callback.answer(f"Обрано: {ALL_COUNTRIES_FOR_SELECTION.get(country_code, country_code)}")
+    if is_from_direction:
+        updated_selected_countries_for_keyboard = _extract_country_signs(lardi_filter_obj.direction_from)
+    else:
+        updated_selected_countries_for_keyboard = _extract_country_signs(lardi_filter_obj.direction_to)
+
+    await callback.message.edit_reply_markup(
+        reply_markup=get_country_options_keyboard(
+            selected_countries=updated_selected_countries_for_keyboard,
+            current_page=current_page,
+            is_from_direction=is_from_direction
+        )
+    )
+
+    selected_count_text = (
+        f"Обрана країна: {len(updated_selected_countries_for_keyboard)}"
+        if updated_selected_countries_for_keyboard else "Жодної країни не обрано"
+    )
+    try:
+        await callback.message.edit_text(
+            f"{settings_manager.get('text_countries_menu')}\n\n{selected_count_text}",
+            reply_markup=get_country_options_keyboard(
+                selected_countries=updated_selected_countries_for_keyboard,
+                current_page=current_page,
+                is_from_direction=is_from_direction
+            )
+        )
+    except TelegramBadRequest as e:
+        logger.warning(f"TelegramBadRequest при оновленні тексту: {e}. Ігноруємо, ймовірно, текст не змінився суттєво, але розмітка оновлена.")
+
+    answer_text = (
+        f"Обрано: {ALL_COUNTRIES_FOR_SELECTION.get(country_code, country_code)}"
+        if country_code.upper() in [c.upper() for c in updated_selected_countries_for_keyboard]
+        else "Вибір країни скасовано"
+    )
+    await callback.answer(answer_text)
 
 
 @router.callback_query(F.data == "filter_boolean_options_menu")

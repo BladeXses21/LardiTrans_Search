@@ -97,7 +97,7 @@ class SettingsManager:
         # Текст для фільтра країн
         "text_select_country_from": "Оберіть країну відправлення:",
         "text_select_country_to": "Оберіть країну призначення",
-        "text_countries_menu": "Оберіть країни зі списку. Обрану країну позначено ✅:"
+        "text_countries_menu": "Оберіть країни зі списку. Обрану країну позначено ✅:",
 
     }
 

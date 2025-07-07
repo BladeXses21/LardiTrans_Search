@@ -112,16 +112,17 @@ async def main() -> None:
     notification_task = asyncio.create_task(notification_checker(bot))
     logger.info("Запущено фонову задачу перевірки сповіщень.")
 
-    cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
+    # todo - тут потрібно буде зняти коментарій
+    # cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
     logger.info("Запущено фонову задачу оновлення Lardi-Trans cookie.")
 
-    try:
-        get_client = LardiGeoClient()
-        logger.info("Testing LardiGeoClient.get_geo_data for 'Львів'...")
-        lviv_data = await get_client.get_geo_data(query="Львів")
-        logger.info(f"Geographical data for 'Львів': {lviv_data}")
-    except Exception as e:
-        logger.error(f"Error testing LardiGeoClient: {e}")
+    # try:
+    #     get_client = LardiGeoClient()
+    #     logger.info("Testing LardiGeoClient.get_geo_data for 'Львів'...")
+    #     lviv_data = await get_client.get_geo_data(query="Львів")
+    #     logger.info(f"Geographical data for 'Львів': {lviv_data}")
+    # except Exception as e:
+    #     logger.error(f"Error testing LardiGeoClient: {e}")
 
     # Запускаємо бота
     logger.info("Бот запущено!")
