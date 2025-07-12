@@ -128,7 +128,6 @@ async def main() -> None:
     logger.info("Бот запущено!")
     await dp.start_polling(bot)
 
-    # Очікуємо завершення фонових задач (це може бути корисно при зупинці програми)
     await web_server_task
     await notification_task
 

@@ -30,8 +30,13 @@ class FilterForm(StatesGroup):
     waiting_for_height1 = State()
     waiting_for_height2 = State()
 
-    waiting_for_country_from = State() # Очікування вибору країни відправлення
-    waiting_for_country_to = State()   # Очікування вибору країни призначення
+    waiting_for_country_from = State()
+    waiting_for_country_to = State()
 
-    # Додати інші стани для інших фільтрів, які потребують введення тексту
+    select_direction_type = State()
+    select_country = State()
+    select_region = State()
+    select_town = State()
 
+    waiting_for_town_query = State()
+    select_town_from_search_results = State()

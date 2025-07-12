@@ -24,12 +24,14 @@ from modules.keyboards import (
     get_numeric_input_keyboard,
     get_payment_forms_keyboard,
     get_boolean_options_keyboard,
-    get_notification_settings_keyboard, get_country_options_keyboard, get_direction_filter_menu_keyboard,
+    get_notification_settings_keyboard,
+    get_country_options_keyboard,
+    get_direction_filter_menu_keyboard,
 )
 from modules.fsm_states import LardiForm, FilterForm
-from modules.lardi_api_client import LardiClient, LardiOfferClient
+from modules.lardi_api_client import LardiClient, LardiOfferClient, LardiGeoClient
 
-from modules.utils import date_format, add_line, user_filter_to_dict, boolean_options_names, ALL_COUNTRIES_FOR_SELECTION, COUNTRIES_PER_PAGE
+from modules.utils import date_format, add_line, user_filter_to_dict, boolean_options_names, ALL_COUNTRIES_FOR_SELECTION, COUNTRIES_PER_PAGE, escape_markdown_v2
 from datetime import datetime, timezone, timedelta
 
 # --- Django моделі ---
@@ -45,6 +47,7 @@ router = Router()
 # Ініціалізація клієнтів Lardi
 lardi_client = LardiClient()
 lardi_offer_client = LardiOfferClient()
+lardi_geo_client = LardiGeoClient()
 
 INITIAL_NOTIFICATION_OFFSET_MINUTES = 5  # Вантажі за останні 10 хвилин
 
@@ -311,24 +314,65 @@ async def process_offer_id(message: Message, state: FSMContext):
         offer_id = int(message.text)
         await message.answer("Завантажую інформацію про вантаж...")
 
-        # Використання вашого класу LardiOfferClient для отримання інформації
-        data = lardi_offer_client.get_offer(offer_id)
+        data = await lardi_offer_client.get_offer(offer_id)
 
         if data:
             cargo_data = data.get('cargo', {})
             if cargo_data:
-                # Формуємо красивий рядок для виводу в Telegram
-                response_text = f"📄 Деталі вантажу (ID: {offer_id})\n" + "=" * 40 + "\n"
-                for key, value in cargo_data.items():
-                    if isinstance(value, (dict, list)):
-                        # Для вкладених об'єктів/списків виводимо їх як JSON рядок
-                        try:
-                            response_text += f"{key}: {json.dumps(value, ensure_ascii=False, indent=2)}\n"
-                        except TypeError:  # На випадок, якщо об'єкт не серіалізується
-                            response_text += f"{key}: {str(value)}\n"
-                    else:
-                        response_text += f"{key}: {value}\n"
-                response_text += "=" * 40
+                # Extract and format data
+                cargo_id_escaped = escape_markdown_v2(str(offer_id))
+                date_from = date_format(cargo_data.get('dateFrom', ''))
+                date_to = date_format(cargo_data.get('dateTo', ''))
+                date_create = date_format(cargo_data.get('dateCreate', ''))
+                date_edit = date_format(cargo_data.get('dateEdit', ''))
+
+                source_waypoint = cargo_data.get('waypointListSource', [{}])[0]
+                from_town = escape_markdown_v2(source_waypoint.get('townName', 'Н/Д'))
+                from_region_full_name = source_waypoint.get('townFullName', '')
+                from_region = escape_markdown_v2(from_region_full_name.split(',')[1].strip() if len(from_region_full_name.split(',')) > 1 else 'Н/Д')
+                from_country_sign = escape_markdown_v2(source_waypoint.get('countrySign', 'Н/Д'))
+                from_address = escape_markdown_v2(source_waypoint.get('address', ''))
+
+                target_waypoint = cargo_data.get('waypointListTarget', [{}])[0]
+                to_town = escape_markdown_v2(target_waypoint.get('townName', 'Н/Д'))
+                to_region_full_name = target_waypoint.get('townFullName', '')
+                to_region = escape_markdown_v2(to_region_full_name.split(',')[1].strip() if len(to_region_full_name.split(',')) > 1 else 'Н/Д')
+                to_country_sign = escape_markdown_v2(target_waypoint.get('countrySign', 'Н/Д'))
+                to_address = escape_markdown_v2(target_waypoint.get('address', ''))
+
+                load_types = ", ".join([escape_markdown_v2(lt) for lt in cargo_data.get('loadTypes', [])]) or "Н/Д"
+                gruz_name = escape_markdown_v2(cargo_data.get('gruzName', 'Н/Д'))
+                gruz_mass = escape_markdown_v2(str(cargo_data.get('gruzMass1', 'Н/Д')))
+                gruz_volume = escape_markdown_v2(str(cargo_data.get('gruzVolume1', 'Н/Д')))
+                payment_value = escape_markdown_v2(str(cargo_data.get('paymentValue', 'Н/Д')))
+                payment_forms = escape_markdown_v2(", ".join([pf.get('name', '') for pf in cargo_data.get('paymentForms', []) if pf.get('name')])) or "Н/Д"
+
+                contact_info = cargo_data.get('proposalUser', {}).get('contact', {})
+                contact_face = escape_markdown_v2(contact_info.get('face', 'Н/Д'))
+                contact_name = escape_markdown_v2(contact_info.get('name', 'Н/Д'))
+                phone_item1 = escape_markdown_v2(contact_info.get('phoneItem1', {}).get('phone', ''))
+                phone_item2 = escape_markdown_v2(contact_info.get('phoneItem2', {}).get('phone', ''))
+
+                response_text = (
+                        f"📄 Деталі вантажу (ID: {cargo_id_escaped})\n"
+                        + "=" * 40 + "\n"
+                        + add_line("🕒 ", f"{date_from} → {date_to}")
+                        + add_line("📅 Ств.: ", date_create)
+                        + add_line("📅 Змін.: ", date_edit)
+                        + add_line("📌 Завантаження: ", f"*{from_town}*, *{from_region}*, *{from_country_sign}*", important=True)
+                        + add_line("◽ ", from_address)
+                        + add_line("📍 Вивантаження: ", f"*{to_town}*, *{to_region}*, *{to_country_sign}*", important=True)
+                        + add_line("◾ ", to_address)
+                        + add_line("🚚 Тип завантаження: ", load_types)
+                        + add_line("📦 Вантаж: ", gruz_name)
+                        + add_line("⚖️ Вага: ", gruz_mass)
+                        + add_line("📐 Обʼєм: ", gruz_volume)
+                        + add_line("💰 Оплата: ", f"*{payment_value} ({payment_forms})*", important=True)
+                        + add_line("👤 Контактна особа: ", contact_face)
+                        + add_line("Повне ім'я: ", contact_name)
+                        + add_line("📞 Телефон 1: ", phone_item1)
+                        + add_line("📞 Телефон 2: ", phone_item2)
+                )
                 await message.answer(response_text, reply_markup=get_back_to_main_menu_button())
             else:
                 await message.answer(settings_manager.get("text_offer_not_found"), reply_markup=get_back_to_main_menu_button())
@@ -341,6 +385,7 @@ async def process_offer_id(message: Message, state: FSMContext):
             reply_markup=get_cancel_keyboard()
         )
     except Exception as e:
+        logger.error(f"Помилка при обробці ID вантажу: {e}", exc_info=True)
         await message.answer(f"❌ Сталася помилка: {e}", reply_markup=get_back_to_main_menu_button())
     finally:
         await state.clear()
@@ -900,13 +945,87 @@ def _extract_country_signs(direction_data: Union[Dict[str, Any], List[Any], str,
     return [c.upper() for c in list(set(selected_countries))]
 
 
+
+@router.message(FilterForm.waiting_for_town_query)
+async def process_town_search_query(message: Message, state: FSMContext):
+    """
+    Обробник текстового вводу назви міста для пошуку.
+    Виконує пошук через LardiGeoClient та відображає результати.
+    """
+    user_query = message.text.strip()
+    telegram_id = message.from_user.id
+    lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
+
+    if not user_query:
+        await message.answer(settings_manager.get("text_enter_town_name_for_search_error"), reply_markup=get_cancel_keyboard())
+        return
+
+    state_data = await state.get_data()
+    direction_type = state_data.get('direction_type')
+
+    country_sign = "UA" # Значення за замовчуванням, якщо не знайдено
+    direction_filter_json = None
+
+    if direction_type == 'from' and lardi_filter_obj.direction_from:
+        direction_filter_json = lardi_filter_obj.direction_from
+    elif direction_type == 'to' and lardi_filter_obj.direction_to:
+        direction_filter_json = lardi_filter_obj.direction_to
+
+    if direction_filter_json:
+        try:
+            # Парсимо JSON-рядок
+            direction_data = json.loads(direction_filter_json)
+            if direction_data and 'directionRows' in direction_data and direction_data['directionRows']:
+                first_row = direction_data['directionRows'][0]
+                if 'countrySign' in first_row:
+                    country_sign = first_row['countrySign']
+                    logger.info(f"Using country sign from filter: {country_sign} for direction {direction_type}")
+
+        except json.JSONDecodeError:
+            logger.error(f"Помилка парсингу JSON для напрямку {direction_type}: {direction_filter_json}")
+
+        except KeyError as e:
+            logger.error(f"Відсутній ключ у JSON фільтра напрямку {direction_type}: {e}")
+
+    await message.answer("Шукаю міста за вашим запитом...")
+
+    geo_data = await lardi_geo_client.get_geo_data(query=user_query, sign=country_sign)
+
+    towns_results = [item for item in geo_data if item.get('type') == 'TOWN']
+
+    print(towns_results)
+    # if not towns_results:
+    #     await message.answer(
+    #         settings_manager.get("text_no_towns_found").format(query=user_query),
+    #         reply_markup=get_town_search_keyboard(direction_type=direction_type)
+    #     )
+    #     return
+    #
+    # await state.update_data(
+    #     towns_search_results=towns_results,
+    #     current_town_search_query=user_query,
+    #     current_town_search_page=0
+    # )
+    #
+    # await message.answer(
+    #     settings_manager.get("text_select_town_from_list"),
+    #     reply_markup=get_towns_search_results_keyboard(
+    #         direction_type=direction_type,
+    #         towns_data=towns_results,
+    #         current_page=0
+    #     )
+    # )
+    # await state.set_state(FilterForm.select_town)
+
+
+
 @router.callback_query(F.data == "direction_filter_menu")
 async def cb_direction_filter_menu(callback: CallbackQuery, state: FSMContext):
     """
     Показує меню налаштування напрямків.
     """
     await callback.message.edit_text(
-        "Text directions menu",
+        settings_manager.get("text_directions_menu"),
         reply_markup=get_direction_filter_menu_keyboard()
     )
     await state.set_state(FilterForm.direction_menu)
@@ -942,7 +1061,7 @@ async def cb_set_direction_to_country(callback: CallbackQuery, state: FSMContext
     current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_to)
 
     await callback.message.edit_text(
-        "2",
+        settings_manager.get("text_countries_menu"),
         reply_markup=get_country_options_keyboard(current_selected_countries, current_page=0, is_from_direction=False)
     )
     await state.set_state(FilterForm.waiting_for_country_to)
@@ -1017,12 +1136,10 @@ async def cb_select_country(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    # --- ЛОГУВАННЯ ДЛЯ ДІАГНОСТИКИ ---
     logger.info(f"cb_select_country: Запущено для user_id={telegram_id}, country_code={country_code}, direction_type={'from' if is_from_direction else 'to'}")
     logger.info(f"cb_select_country: LardiSearchFilter ID: {lardi_filter_obj.id}")
     logger.info(f"cb_select_country: direction_from (з БД ДО обробки): {lardi_filter_obj.direction_from}")
     logger.info(f"cb_select_country: direction_to (з БД ДО обробки): {lardi_filter_obj.direction_to}")
-    # --- КІНЕЦЬ ЛОГІВ ---
 
     if is_from_direction:
         current_selected_countries = _extract_country_signs(lardi_filter_obj.direction_from)
@@ -1070,7 +1187,7 @@ async def cb_select_country(callback: CallbackQuery, state: FSMContext):
     )
 
     selected_count_text = (
-        f"Обрана країна: {len(updated_selected_countries_for_keyboard)}"
+        f"Обрана країна: {country_code}"
         if updated_selected_countries_for_keyboard else "Жодної країни не обрано"
     )
     try:
@@ -1101,7 +1218,6 @@ async def cb_filter_boolean_options_menu(callback: CallbackQuery, state: FSMCont
     telegram_id = callback.from_user.id
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    # Передаємо об'єкт фільтра, щоб клавіатура могла прочитати всі булеві поля
     current_filters_dict = user_filter_to_dict(lardi_filter_obj)
 
     await state.set_state(FilterForm.boolean_options_menu)
@@ -1122,50 +1238,30 @@ async def cb_toggle_boolean_option(callback: CallbackQuery):
 
     lardi_filter_obj = await _get_or_create_lardi_filter(telegram_id)
 
-    # --- Debugging Start ---
-    # Отримуємо значення до зміни
     current_value_before_set = getattr(lardi_filter_obj, param_name, False)
     logger.info(f"User {telegram_id}: Toggling option '{param_name}'.")
     logger.info(f"Before change - LardiFilter object state for '{param_name}': {current_value_before_set}")
-    # --- Debugging End ---
 
     new_value = not current_value_before_set
 
-    # Встановлюємо нове значення для об'єкта в пам'яті
     setattr(lardi_filter_obj, param_name, new_value)
-
-    # --- Debugging Start ---
     logger.info(f"After setattr (in-memory) - LardiFilter object state for '{param_name}': {getattr(lardi_filter_obj, param_name, 'N/A')}")
-    # --- Debugging End ---
 
-    # Зберігаємо зміни в базу даних
     await lardi_filter_obj.asave()
 
-    # --- КЛЮЧОВИЙ КРОК: Явно перезавантажуємо об'єкт з бази даних ---
-    # Це гарантує, що ми працюємо з найактуальнішим станом з БД,
-    # а не з можливим застарілим станом об'єкта в пам'яті.
     lardi_filter_obj_reloaded = await _get_or_create_lardi_filter(telegram_id)
-
-    # --- Debugging Start ---
     logger.info(f"After asave() and RELOAD - LardiFilter object state for '{param_name}': {getattr(lardi_filter_obj_reloaded, param_name, 'N/A')}")
-    # --- Debugging End ---
 
-    # Тепер перевіряємо, чи фактично змінилось значення в ПЕРЕЗАВАНТАЖЕНОМУ об'єкті
-    # Якщо значення в перезавантаженому об'єкті дорівнює тому, що було ДО ЗМІНИ,
-    # це означає, що збереження або перезавантаження не спрацювало належним чином,
-    # або значення в БД вже було таким, як ми намагалися встановити.
     if getattr(lardi_filter_obj_reloaded, param_name) == current_value_before_set:
         display_name = boolean_options_names.get(param_name, param_name)
         status_text = "увімкнено" if current_value_before_set else "вимкнено"  # Використовуємо значення до зміни, бо фактичної зміни не відбулось
         await callback.answer(f"Опція '{display_name}' вже {status_text} (без змін).", show_alert=False)
-        return  # Виходимо, оскільки немає чого змінювати
+        return
 
-    # Якщо ми дійшли сюди, то зміна відбулася і була успішно перезавантажена
     display_name = boolean_options_names.get(param_name, param_name)
-    status_text = "увімкнено" if new_value else "вимкнено"  # Використовуємо intended new_value для повідомлення
+    status_text = "увімкнено" if new_value else "вимкнено"
     message_text = f"✅ Опція '{display_name}' {status_text}."
 
-    # Генеруємо клавіатуру з ПЕРЕЗАВАНТАЖЕНОГО об'єкта
     current_filters_dict_updated = user_filter_to_dict(lardi_filter_obj_reloaded)
 
     try:
@@ -1176,9 +1272,8 @@ async def cb_toggle_boolean_option(callback: CallbackQuery):
         if "message is not modified" in str(e):
             logger.warning(f"Message reply markup not modified for user {telegram_id}: {e}")
         else:
-            raise  # Перевикидаємо інші помилки TelegramBadRequest
+            raise
     finally:
-        # Завжди відповідаємо на callback
         await callback.answer(message_text, show_alert=False)
 
 

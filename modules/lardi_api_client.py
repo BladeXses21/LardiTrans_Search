@@ -382,4 +382,5 @@ class LardiGeoClient:
             logger.error(f"Помилка при запиті геоданих для запиту '{query}.'\n Exception: {e}")
             return []
 
+
 lardi_notification_client = LardiNotificationClient()

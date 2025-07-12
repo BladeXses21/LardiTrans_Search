@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from modules.app_config import settings_manager, env_config
 import json
-from typing import Optional, List  # Додаємо Optional
+from typing import Optional, List, Dict  # Додаємо Optional
 
 from modules.utils import boolean_options_names, ALL_COUNTRIES_FOR_SELECTION, COUNTRIES_PER_PAGE
 
@@ -84,7 +84,6 @@ def get_cargo_params_filter_keyboard(current_filters: dict) -> InlineKeyboardMar
     """
     builder = InlineKeyboardBuilder()
 
-    # Функція для отримання значення фільтра або "не вказано"
     def get_filter_value(key1, key2=None):
         val1 = current_filters.get(key1)
         val2 = current_filters.get(key2) if key2 else None
@@ -167,7 +166,6 @@ def get_payment_forms_keyboard(selected_payment_forms: list) -> InlineKeyboardMa
     }
 
     for form_id, form_name in all_payment_forms.items():
-        # Перетворюємо form_id на рядок для порівняння, якщо selected_payment_forms містить рядки
         status = "✅" if form_id in selected_payment_forms else "❌"
         builder.row(InlineKeyboardButton(text=f"{status} {form_name}", callback_data=f"toggle_payment_form_{form_id}"))
 
@@ -182,8 +180,51 @@ def get_direction_filter_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📍 Країна відправлення", callback_data="set_direction_from_country"))
     builder.row(InlineKeyboardButton(text="🗺️ Країна призначення", callback_data="set_direction_to_country"))
+    builder.row(InlineKeyboardButton(text="🌄 Місто відправлення", callback_data="set_direction_from_city"))
+    builder.row(InlineKeyboardButton(text="🌅 Місто призначення", callback_data="set_direction_to_city"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад до меню фільтрів", callback_data="back_to_filter_main_menu"))
     return builder.as_markup()
+
+
+def get_town_search_keyboard(direction_type: str) -> InlineKeyboardMarkup:
+    """
+    Клавіатура для запиту назви міста для пошуку.
+    direction_type: 'from' або 'to'
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до вибору напрямку", callback_data="back_to_direction_selection"))
+    return builder.as_markup()
+
+
+def get_towns_search_results_keyboard(direction_type: str, towns_data: List[Dict], current_page: int = 0) -> InlineKeyboardMarkup:
+    """
+    Повертає клавіатуру з опціями міст, отриманих через пошук, з пагінацією.
+    towns_data: список словників {id: ..., name: ..., fullName: ..., type: 'TOWN'}
+    """
+    builder = InlineKeyboardBuilder()
+    towns_per_page = COUNTRIES_PER_PAGE
+    start_index = current_page * towns_per_page
+    end_index = start_index + towns_per_page
+
+    towns_to_display = towns_data[start_index:end_index]
+
+    for town in towns_to_display:
+        builder.row(InlineKeyboardButton(text=town['fullName'], callback_data=f"select_town_search_{direction_type}:{town['id']}"))
+
+    pagination_buttons = []
+    if current_page > 0:
+        pagination_buttons.append(InlineKeyboardButton(text="⬅️ Попередня", callback_data=f"town_search_page_{direction_type}:{current_page - 1}"))
+    if end_index < len(towns_data):
+        pagination_buttons.append(InlineKeyboardButton(text="Наступна ➡️", callback_data=f"town_search_page_{direction_type}:{current_page + 1}"))
+
+    if pagination_buttons:
+        builder.row(*pagination_buttons)
+
+    builder.row(InlineKeyboardButton(text="🗑️ Очистити", callback_data=f"clear_direction_{direction_type}"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до вибору напрямку", callback_data="back_to_direction_selection"))
+    return builder.as_markup()
+
+# todo - додати функцію для вибору міст в user_handler.py
 
 
 def get_country_options_keyboard(selected_countries: List[str], current_page: int = 0, is_from_direction: bool = True) -> InlineKeyboardMarkup:
@@ -284,11 +325,8 @@ def get_cargo_details_webapp_keyboard(cargo_id: int) -> InlineKeyboardMarkup:
     Повертає клавіатуру з кнопкою для запуску Web App з деталями вантажу.
     """
     builder = InlineKeyboardBuilder()
-    # URL для WebApp буде виглядати: https://your-domain.com/webapp/cargo_details.html?id={cargo_id}
-    # Змінено, щоб відповідати маршруту `/webapp/cargo_details.html` у `web_server.py`
     webapp_url_with_id = f"{env_config.WEBAPP_BASE_URL}.html?id={cargo_id}"
 
-    # Створюємо кнопку, яка відкриває Web App
     builder.row(InlineKeyboardButton(text="Деталі вантажу", web_app=WebAppInfo(url=webapp_url_with_id)))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data="start_menu"))
     return builder.as_markup()

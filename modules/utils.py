@@ -27,6 +27,11 @@ def add_line(prefix: str, value: any, important: bool = False) -> str:
         return f"{prefix}*{value}*\n"
     return f"{prefix}{value}\n"
 
+def escape_markdown_v2(text: str) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    escape_chars = r'_*\\[\\]()~`>#+-=|{}!'
+    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\\\1', text)
 
 def user_filter_to_dict(lardi_filter_obj) -> dict:
     user_filters = {
@@ -106,3 +111,4 @@ ALL_COUNTRIES_FOR_SELECTION = {
 }
 
 COUNTRIES_PER_PAGE = 8
+
