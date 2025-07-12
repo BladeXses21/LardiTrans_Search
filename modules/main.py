@@ -113,7 +113,7 @@ async def main() -> None:
     logger.info("Запущено фонову задачу перевірки сповіщень.")
 
     # todo - тут потрібно буде зняти коментарій
-    # cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
+    cookie_refresh_task = asyncio.create_task(refresh_cookies_periodically(cookie_manager))
     logger.info("Запущено фонову задачу оновлення Lardi-Trans cookie.")
 
     # try:
